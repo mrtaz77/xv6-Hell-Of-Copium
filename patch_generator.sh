@@ -1,13 +1,14 @@
 #!/bin/bash
 
+patch_file_name="system_call"
+output_dir="../Offlines/SystemCall"
+
 cd xv6-riscv || {
 	echo "xv6-riscv dir not found!"
 	exit 1
 }
 
 current_commit=$(git rev-parse HEAD)
-current_commit_msg=$(git log -1 --pretty=%s "$current_commit")
-echo "Current commit message: $current_commit_msg"
 
 origin_head=$(git rev-parse origin/riscv)
 
@@ -16,9 +17,7 @@ if [ "$current_commit" == "$origin_head" ]; then
 	exit 0
 fi
 
-sanitized_commit_msg=$(echo "$current_commit_msg" | tr ' ' '_' | tr -cd '[:alnum:]_-')
-
-patch_file="${sanitized_commit_msg}.patch"
+patch_file="${patch_file_name}.patch"
 git diff "$origin_head" "$current_commit" > "$patch_file"
 
 if [ -s "$patch_file" ]; then
@@ -28,4 +27,4 @@ else
 	rm "$patch_file"
 fi
 
-mv "$patch_file" ../Offlines/SystemCall
+mv "$patch_file" "$output_dir"
