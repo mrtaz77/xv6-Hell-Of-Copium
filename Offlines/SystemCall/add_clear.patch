@@ -1,0 +1,26 @@
+diff --git a/Makefile b/Makefile
+index 62fd0f8..3ea54b3 100644
+--- a/Makefile
++++ b/Makefile
+@@ -139,6 +139,7 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
++	$U/_clear
+ 
+ fs.img: mkfs/mkfs README $(UPROGS)
+ 	mkfs/mkfs fs.img README $(UPROGS)
+diff --git a/user/clear.c b/user/clear.c
+new file mode 100644
+index 0000000..779740f
+--- /dev/null
++++ b/user/clear.c
+@@ -0,0 +1,7 @@
++#include "kernel/types.h"
++#include "user/user.h"
++
++int main() {
++	printf("\033[2J\033[H");
++	exit(0);
++}
+\ No newline at end of file
