@@ -1,35 +1,57 @@
 diff --git a/Makefile b/Makefile
-index 62fd0f8..6a25e1b 100644
+index 62fd0f8..25d8ec1 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -139,6 +139,9 @@ UPROGS=\
+@@ -139,6 +139,10 @@ UPROGS=\
  	$U/_grind\
  	$U/_wc\
  	$U/_zombie\
 +	$U/_clear\
 +	$U/_print_uid\
-+	$U/_set_uid
++	$U/_set_uid\
++	$U/_trace\
  
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..bcc1483 100644
+index d1b6bb9..ce02555 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
-@@ -106,6 +106,8 @@ void            yield(void);
+@@ -106,6 +106,9 @@ void            yield(void);
  int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
  int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
  void            procdump(void);
 +int             getuid(void);
 +int             setuid(int);
++int             trace(int);
  
  // swtch.S
  void            swtch(struct context*, struct context*);
+@@ -140,6 +143,11 @@ void            argaddr(int, uint64 *);
+ int             fetchstr(uint64, char*, int);
+ int             fetchaddr(uint64, uint64*);
+ void            syscall();
++int             is_trace_enabled();
++void            print_argint(int);
++void            print_argstr(int);
++void            print_argaddr(int);
++void            print_args();
+ 
+ // trap.c
+ extern uint     ticks;
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..668abf8 100644
+index 58a8a0b..a24a66b 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
-@@ -686,3 +686,19 @@ procdump(void)
+@@ -169,6 +169,7 @@ freeproc(struct proc *p)
+   p->killed = 0;
+   p->xstate = 0;
+   p->state = UNUSED;
++  p->traced_syscall_number = 0;
+ }
+ 
+ // Create a user page table for a given process, with no user memory,
+@@ -686,3 +687,26 @@ procdump(void)
      printf("\n");
    }
  }
@@ -49,43 +71,253 @@ index 58a8a0b..668abf8 100644
 +  uid = _uid;
 +  return 0;
 +}
++
++int trace(int syscall_number)
++{
++  struct proc *p = myproc();
++  p->traced_syscall_number = syscall_number;
++  return 0;
++}
+diff --git a/kernel/proc.h b/kernel/proc.h
+index d021857..87c1d0a 100644
+--- a/kernel/proc.h
++++ b/kernel/proc.h
+@@ -91,6 +91,7 @@ struct proc {
+   int killed;                  // If non-zero, have been killed
+   int xstate;                  // Exit status to be returned to parent's wait
+   int pid;                     // Process ID
++  int traced_syscall_number;    // Trace syscall by number
+ 
+   // wait_lock must be held when using this:
+   struct proc *parent;         // Parent process
 diff --git a/kernel/syscall.c b/kernel/syscall.c
-index ed65409..1e74e64 100644
+index ed65409..6e04aa7 100644
 --- a/kernel/syscall.c
 +++ b/kernel/syscall.c
-@@ -101,6 +101,8 @@ extern uint64 sys_unlink(void);
+@@ -59,6 +59,15 @@ argint(int n, int *ip)
+   *ip = argraw(n);
+ }
+ 
++// print the nth 32-bit system call argument.
++void
++print_argint(int n)
++{
++  int int_arg;
++  argint(n, &int_arg);
++  printf("%d", int_arg);
++}
++
+ // Retrieve an argument as a pointer.
+ // Doesn't check for legality, since
+ // copyin/copyout will do that.
+@@ -68,6 +77,27 @@ argaddr(int n, uint64 *ip)
+   *ip = argraw(n);
+ }
+ 
++// Print the argument as a pointer.
++void
++print_argaddr(int n)
++{
++  uint64 addr_arg;
++  argaddr(n, &addr_arg);
++  char hex_digits[] = "0123456789abcdef";
++  char buffer[17]; // Buffer to store the hex representation, 16 hex digits + '\0'
++  
++  buffer[16] = '\0';  // Null-terminate the string
++
++  // Fill the buffer with the hexadecimal representation, starting from the least significant digit
++  for (int i = 15; i >= 0; i--) {
++      buffer[i] = hex_digits[addr_arg & 0xF]; // Get the last 4 bits (one hex digit)
++      addr_arg >>= 4;  // Shift the address by 4 bits to the right (i.e., divide by 16)
++  }
++
++  // Print the result with the '0x' prefix
++  printf("0x%s", buffer);
++}
++
+ // Fetch the nth word-sized system call argument as a null-terminated string.
+ // Copies into buf, at most max.
+ // Returns string length if OK (including nul), -1 if error.
+@@ -79,6 +109,15 @@ argstr(int n, char *buf, int max)
+   return fetchstr(addr, buf, max);
+ }
+ 
++// Print the string
++void
++print_argstr(int n)
++{
++  char str_arg[MAXPATH];
++  argstr(n, str_arg, MAXPATH);
++  printf("%s", str_arg);
++}
++
+ // Prototypes for the functions that handle system calls.
+ extern uint64 sys_fork(void);
+ extern uint64 sys_exit(void);
+@@ -101,6 +140,9 @@ extern uint64 sys_unlink(void);
  extern uint64 sys_link(void);
  extern uint64 sys_mkdir(void);
  extern uint64 sys_close(void);
 +extern uint64 sys_getuid(void);
 +extern uint64 sys_setuid(void);
++extern uint64 sys_trace(void);
  
  // An array mapping syscall numbers from syscall.h
  // to the function that handles the system call.
-@@ -126,6 +128,8 @@ static uint64 (*syscalls[])(void) = {
+@@ -126,6 +168,37 @@ static uint64 (*syscalls[])(void) = {
  [SYS_link]    sys_link,
  [SYS_mkdir]   sys_mkdir,
  [SYS_close]   sys_close,
 +[SYS_getuid]  sys_getuid,
 +[SYS_setuid]  sys_setuid,
++[SYS_trace]   sys_trace,
++};
++
++// Array mapping syscall numbers to their names
++const char *syscall_names[] = {
++[SYS_fork]   = "fork",
++[SYS_exit]   = "exit",
++[SYS_wait]   = "wait",
++[SYS_pipe]   = "pipe",
++[SYS_read]   = "read",
++[SYS_kill]   = "kill",
++[SYS_exec]   = "exec",
++[SYS_fstat]  = "fstat",
++[SYS_chdir]  = "chdir",
++[SYS_dup]    = "dup",
++[SYS_getpid] = "getpid",
++[SYS_sbrk]   = "sbrk",
++[SYS_sleep]  = "sleep",
++[SYS_uptime] = "uptime",
++[SYS_open]   = "open",
++[SYS_write]  = "write",
++[SYS_mknod]  = "mknod",
++[SYS_unlink] = "unlink",
++[SYS_link]   = "link",
++[SYS_mkdir]  = "mkdir",
++[SYS_close]  = "close",
++[SYS_getuid] = "getuid",
++[SYS_setuid] = "setuid",
++[SYS_trace]  = "trace",
  };
  
  void
+@@ -138,10 +211,99 @@ syscall(void)
+   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
+     // Use num to lookup the system call function for num, call it,
+     // and store its return value in p->trapframe->a0
++
++    // trace log
++    int _is_trace_enabled = is_trace_enabled();
++    if(_is_trace_enabled) {
++      printf("pid %d, syscall: %s, args: (", p->pid, syscall_names[num]);
++      print_args(num);
++    }
++
+     p->trapframe->a0 = syscalls[num]();
++    
++    // trace log
++    if(_is_trace_enabled) {
++      printf("), return: %lu\n", p->trapframe->a0);
++    } 
+   } else {
+     printf("%d %s: unknown sys call %d\n",
+             p->pid, p->name, num);
+     p->trapframe->a0 = -1;
+   }
+ }
++
++int
++is_trace_enabled()
++{
++  struct proc *p = myproc();
++  if(p->trapframe->a7 == p->traced_syscall_number)
++    return 1;
++  return 0;
++}
++
++void
++print_args(int syscall_num)
++{
++    switch (syscall_num)
++    {
++      case SYS_exit:
++          print_argint(0);  // Exit status
++          break;
++      case SYS_wait:
++          print_argaddr(0); // Pointer to store exit status
++          break;
++      case SYS_pipe:
++          print_argaddr(0); // Pipe file descriptors
++          break;
++      case SYS_read:
++      case SYS_write:
++          print_argint(0);  // File descriptor
++          printf(", ");
++          print_argaddr(1); // Buffer address
++          printf(", ");
++          print_argint(2);  // Number of bytes
++          break;
++      case SYS_close:
++      case SYS_kill:
++      case SYS_dup:
++      case SYS_sbrk:
++      case SYS_sleep:
++      case SYS_setuid:
++      case SYS_trace:
++          print_argint(0);  // File descriptor / process ID / size / seconds / user ID / syscall number
++          break;
++      case SYS_exec:
++          print_argstr(0);  // Command to execute
++          printf(", ");
++          print_argaddr(1); // Arguments address
++          break;
++      case SYS_open:
++          print_argstr(0);  // Filename
++          printf(", ");
++          print_argint(1);  // Flags
++          break;
++      case SYS_mknod:
++          print_argint(0);  // Device number
++          printf(", ");
++          print_argint(1);  // File type
++          break;
++      case SYS_unlink:
++      case SYS_mkdir:
++      case SYS_chdir:
++          print_argstr(0);  // Path
++          break;
++      case SYS_fstat:
++          print_argint(0);  // File descriptor
++          printf(", ");
++          print_argaddr(1); // Stat structure address
++          break;
++      case SYS_link:
++          print_argstr(0);  // Old path
++          printf(", ");
++          print_argstr(1);  // New path
++          break;
++      default:
++          // Unhandled syscall, do nothing
++          break;
++    }
++}
 diff --git a/kernel/syscall.h b/kernel/syscall.h
-index bc5f356..72b76f0 100644
+index bc5f356..f8a9ddd 100644
 --- a/kernel/syscall.h
 +++ b/kernel/syscall.h
-@@ -20,3 +20,5 @@
+@@ -20,3 +20,6 @@
  #define SYS_link   19
  #define SYS_mkdir  20
  #define SYS_close  21
 +#define SYS_getuid 22
 +#define SYS_setuid 23
++#define SYS_trace  24
 diff --git a/kernel/sysproc.c b/kernel/sysproc.c
-index 3b4d5bd..365e9a0 100644
+index 3b4d5bd..53064a7 100644
 --- a/kernel/sysproc.c
 +++ b/kernel/sysproc.c
-@@ -91,3 +91,19 @@ sys_uptime(void)
+@@ -91,3 +91,27 @@ sys_uptime(void)
    release(&tickslock);
    return xticks;
  }
@@ -104,6 +336,14 @@ index 3b4d5bd..365e9a0 100644
 +  int uid;
 +  argint(0, &uid);
 +  return setuid(uid);
++}
++
++uint64
++sys_trace(void)
++{
++  int syscall_num;
++  argint(0, &syscall_num);
++  return trace(syscall_num);
 +}
 diff --git a/user/clear.c b/user/clear.c
 new file mode 100644
@@ -155,26 +395,57 @@ index 0000000..eb3cf1a
 +	return 0;
 +}
 \ No newline at end of file
+diff --git a/user/trace.c b/user/trace.c
+new file mode 100644
+index 0000000..645de5f
+--- /dev/null
++++ b/user/trace.c
+@@ -0,0 +1,23 @@
++#include "kernel/types.h"
++#include "user/user.h"
++#include "kernel/fcntl.h"
++
++int main(int argc, char *argv[])
++{
++    if (argc < 3) {
++        fprintf(2, "Usage: trace <sys_call_number> <command> [<args>...]\n");
++        exit(1);
++    }
++
++    int syscall_number = atoi(argv[1]);
++
++    if (trace(syscall_number) < 0) {
++        fprintf(2, "Failed to trace system call number: %d\n", syscall_number);
++        exit(1);
++    }
++
++    exec(argv[2], &argv[2]);
++
++    fprintf(2, "Exec failed: %s\n", argv[2]);
++    exit(1);
++}
 diff --git a/user/user.h b/user/user.h
-index 04013ca..8749155 100644
+index 04013ca..ddc4a63 100644
 --- a/user/user.h
 +++ b/user/user.h
-@@ -22,6 +22,8 @@ int getpid(void);
+@@ -22,6 +22,9 @@ int getpid(void);
  char* sbrk(int);
  int sleep(int);
  int uptime(void);
 +int getuid(void);
 +int setuid(int);
++int trace(int);
  
  // ulib.c
  int stat(const char*, struct stat*);
 diff --git a/user/usys.pl b/user/usys.pl
-index 01e426e..680f683 100755
+index 01e426e..8e022ce 100755
 --- a/user/usys.pl
 +++ b/user/usys.pl
-@@ -36,3 +36,5 @@ entry("getpid");
+@@ -36,3 +36,6 @@ entry("getpid");
  entry("sbrk");
  entry("sleep");
  entry("uptime");
 +entry("getuid");
 +entry("setuid");
++entry("trace");
