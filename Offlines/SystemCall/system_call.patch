@@ -360,13 +360,13 @@ index 0000000..779740f
 \ No newline at end of file
 diff --git a/user/load.c b/user/load.c
 new file mode 100644
-index 0000000..da3ed21
+index 0000000..e288a34
 --- /dev/null
 +++ b/user/load.c
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,66 @@
 +#ifndef CHILD_SLEEP_TIME
-+#define CHILD_SLEEP_TIME 1
-+#define PARENT_SLEEP_TIME (3 * CHILD_SLEEP_TIME)
++#define CHILD_SLEEP_TIME 10
++#define PARENT_SLEEP_TIME (2 * CHILD_SLEEP_TIME)
 +#endif
 +
 +#include "kernel/types.h"
@@ -386,28 +386,27 @@ index 0000000..da3ed21
 +}
 +
 +void generate_child_proc(int child_count, int allocation_amount) {
-+    printf("Parent going to sleep\n");
++    printf("Parent going to sleep.\n");
 +    for (int i = 0; i < child_count; i++) {
 +        int pid = fork();
++        sleep(1); // For clean console output
 +        if (pid < 0) {
 +            // Fork failed
 +            printf("Fork failed\n");
 +            exit(1);
 +        } 
-+        else if (pid > 0) {
-+            // Parent process
-+            sleep(PARENT_SLEEP_TIME);
-+        } 
-+        else {
++        else if (pid == 0) {
 +            // Child process
-+            printf("Child process is created\n");
-+            printf("Child allocated %d bytes\n", allocation_amount);
-+            printf("Child process going to sleep\n");
++            printf("Child is created.\n");
++            malloc(allocation_amount);
++            printf("Child allocated %d byte.\n", allocation_amount);
++            printf("Child going to sleep.\n");
 +            sleep(CHILD_SLEEP_TIME);
 +            exit(0);
 +        }
 +    }
-+    printf("Parent process waking up\n");
++    sleep(PARENT_SLEEP_TIME);
++    printf("Parent wake up.\n");
 +}
 +
 +int main(int argc, char *argv[]) {
