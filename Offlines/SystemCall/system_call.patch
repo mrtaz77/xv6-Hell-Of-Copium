@@ -395,31 +395,49 @@ index 0000000..eb3cf1a
 \ No newline at end of file
 diff --git a/user/trace.c b/user/trace.c
 new file mode 100644
-index 0000000..645de5f
+index 0000000..0795cf7
 --- /dev/null
 +++ b/user/trace.c
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,41 @@
 +#include "kernel/types.h"
 +#include "user/user.h"
 +#include "kernel/fcntl.h"
 +
-+int main(int argc, char *argv[])
-+{
++int is_valid_number(const char *str) {
++    if (str == 0 || *str == '\0') {
++        return 0;
++    }
++    for (int i = 0; str[i] != '\0'; i++) {
++        if (str[i] < '0' || str[i] > '9') {
++            return 0;
++        }
++    }
++    return 1;
++}
++
++int main(int argc, char *argv[]) {
 +    if (argc < 3) {
 +        fprintf(2, "Usage: trace <sys_call_number> <command> [<args>...]\n");
++        exit(1);
++    }
++
++    if (!is_valid_number(argv[1])) {
++        fprintf(2, "Error: Invalid system call number '%s'.\n", argv[1]);
 +        exit(1);
 +    }
 +
 +    int syscall_number = atoi(argv[1]);
 +
 +    if (trace(syscall_number) < 0) {
-+        fprintf(2, "Failed to trace system call number: %d\n", syscall_number);
++        fprintf(2, "Error: Failed to trace system call number: %d\n", syscall_number);
 +        exit(1);
 +    }
 +
-+    exec(argv[2], &argv[2]);
++    if (exec(argv[2], &argv[2]) < 0) {
++        fprintf(2, "Error: Exec failed for command '%s'\n", argv[2]);
++        exit(1);
++    }
 +
-+    fprintf(2, "Exec failed: %s\n", argv[2]);
 +    exit(1);
 +}
 diff --git a/user/user.h b/user/user.h
