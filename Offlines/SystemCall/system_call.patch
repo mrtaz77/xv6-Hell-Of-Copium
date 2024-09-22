@@ -1,8 +1,8 @@
 diff --git a/Makefile b/Makefile
-index 62fd0f8..25d8ec1 100644
+index 62fd0f8..078a709 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -139,6 +139,10 @@ UPROGS=\
+@@ -139,6 +139,11 @@ UPROGS=\
  	$U/_grind\
  	$U/_wc\
  	$U/_zombie\
@@ -10,6 +10,7 @@ index 62fd0f8..25d8ec1 100644
 +	$U/_print_uid\
 +	$U/_set_uid\
 +	$U/_trace\
++	$U/_load\
  
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
@@ -357,6 +358,79 @@ index 0000000..779740f
 +	exit(0);
 +}
 \ No newline at end of file
+diff --git a/user/load.c b/user/load.c
+new file mode 100644
+index 0000000..da3ed21
+--- /dev/null
++++ b/user/load.c
+@@ -0,0 +1,67 @@
++#ifndef CHILD_SLEEP_TIME
++#define CHILD_SLEEP_TIME 1
++#define PARENT_SLEEP_TIME (3 * CHILD_SLEEP_TIME)
++#endif
++
++#include "kernel/types.h"
++#include "kernel/fcntl.h"
++#include "user/user.h"
++
++int is_valid_number(const char *str) {
++    if (str == 0 || *str == '\0') {
++        return 0;
++    }
++    for (int i = 0; str[i] != '\0'; i++) {
++        if (str[i] < '0' || str[i] > '9') {
++            return 0;
++        }
++    }
++    return 1;
++}
++
++void generate_child_proc(int child_count, int allocation_amount) {
++    printf("Parent going to sleep\n");
++    for (int i = 0; i < child_count; i++) {
++        int pid = fork();
++        if (pid < 0) {
++            // Fork failed
++            printf("Fork failed\n");
++            exit(1);
++        } 
++        else if (pid > 0) {
++            // Parent process
++            sleep(PARENT_SLEEP_TIME);
++        } 
++        else {
++            // Child process
++            printf("Child process is created\n");
++            printf("Child allocated %d bytes\n", allocation_amount);
++            printf("Child process going to sleep\n");
++            sleep(CHILD_SLEEP_TIME);
++            exit(0);
++        }
++    }
++    printf("Parent process waking up\n");
++}
++
++int main(int argc, char *argv[]) {
++    if (argc != 3) {
++        fprintf(2, "Usage: load <child_count> <allocation_amount> \n");
++        exit(1);
++    }
++
++    if (!is_valid_number(argv[1])) {
++        fprintf(2, "Error: Invalid child_count '%s'.\n", argv[1]);
++        exit(1);
++    }
++
++    if (!is_valid_number(argv[2])) {
++        fprintf(2, "Error: Invalid allocation_amount '%s'.\n", argv[2]);
++        exit(1);
++    }
++
++    int child_count = atoi(argv[1]);
++    int allocation_amount = atoi(argv[2]);
++
++    generate_child_proc(child_count, allocation_amount);
++}
 diff --git a/user/print_uid.c b/user/print_uid.c
 new file mode 100644
 index 0000000..063e773
