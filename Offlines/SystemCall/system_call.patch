@@ -15,7 +15,7 @@ index 62fd0f8..078a709 100644
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..5b5c3e4 100644
+index d1b6bb9..a06c4d2 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
 @@ -8,6 +8,7 @@ struct spinlock;
@@ -26,7 +26,7 @@ index d1b6bb9..5b5c3e4 100644
  
  // bio.c
  void            binit(void);
-@@ -106,6 +107,12 @@ void            yield(void);
+@@ -106,6 +107,14 @@ void            yield(void);
  int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
  int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
  void            procdump(void);
@@ -36,10 +36,12 @@ index d1b6bb9..5b5c3e4 100644
 +int             info(struct procInfo*);
 +int             setprevcmd(char*);
 +int             getprevcmd(char*);
++int             addcmdtohistory(char*);
++int             getnthcmdfromhistory(char*, int);
  
  // swtch.S
  void            swtch(struct context*, struct context*);
-@@ -140,6 +147,11 @@ void            argaddr(int, uint64 *);
+@@ -140,6 +149,11 @@ void            argaddr(int, uint64 *);
  int             fetchstr(uint64, char*, int);
  int             fetchaddr(uint64, uint64*);
  void            syscall();
@@ -61,19 +63,62 @@ index 6624bff..304064f 100644
  #define MAXPATH      128   // maximum file path name
 +#define MAXCMD       100 // maximum length of command
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..a5fe102 100644
+index 58a8a0b..5d7baaf 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
-@@ -169,6 +169,8 @@ freeproc(struct proc *p)
+@@ -125,6 +125,10 @@ found:
+   p->pid = allocpid();
+   p->state = USED;
+ 
++  // Allocate cmd history
++  p->history.head = 0;
++  p->history.size = 0;
++
+   // Allocate a trapframe page.
+   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+     freeproc(p);
+@@ -149,6 +153,20 @@ found:
+   return p;
+ }
+ 
++// free cmd_history structure
++static void
++free_command_history(struct proc *p) 
++{
++  struct cmd_node *current = p->history.head;
++  while (current != 0) {
++    struct cmd_node *next = current->next;
++    kfree((void*)current);
++    current = next;
++  }
++  p->history.head = 0;
++  p->history.size = 0;
++}
++
+ // free a proc structure and the data hanging from it,
+ // including user pages.
+ // p->lock must be held.
+@@ -169,6 +187,9 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
 +  p->traced_syscall_number = 0;
 +  memset(p->prev_cmd, 0, sizeof(p->prev_cmd));
++  free_command_history(p);
  }
  
  // Create a user page table for a given process, with no user memory,
-@@ -686,3 +688,78 @@ procdump(void)
+@@ -322,6 +343,9 @@ fork(void)
+   np->state = RUNNABLE;
+   release(&np->lock);
+ 
++  // copy traced syscall number
++  np->traced_syscall_number = p->traced_syscall_number;
++  
+   return pid;
+ }
+ 
+@@ -686,3 +710,116 @@ procdump(void)
      printf("\n");
    }
  }
@@ -152,26 +197,65 @@ index 58a8a0b..a5fe102 100644
 +  return 0;
 +}
 +
++int
++addcmdtohistory(char *prevcmd)
++{
++  struct proc *p = myproc();
++  struct cmd_node *new_node = (struct cmd_node*)kalloc();
++  if (new_node == 0) {
++    printf("Failed to allocate memory for new command\n");
++    return -1;
++  }
++  safestrcpy(new_node->command, prevcmd, sizeof(new_node->command));
++  acquire(&p->lock);
++  new_node->next = p->history.head;
++  p->history.head = new_node;
++  p->history.size++;
++  release(&p->lock);
++  return 0;
++}
++
++int
++getnthcmdfromhistory(char *userprevcmd, int n)
++{
++  struct proc *p = myproc();
++  if (n > p->history.size || n <= 0) {
++    printf("No such command in history.\n");
++    return -1;
++  }
++  acquire(&p->lock);
++  struct cmd_node *current = p->history.head;
++  for (int i = 0; i < n - 1; i++) {
++    current = current->next;
++  }
++  if (copyout(p->pagetable, (uint64)userprevcmd, current->command, strlen(current->command) + 1) < 0) {
++    release(&p->lock);
++    return -1;
++  }
++  release(&p->lock);
++  return 0;
++}
 diff --git a/kernel/proc.h b/kernel/proc.h
-index d021857..0e00f6f 100644
+index d021857..4880729 100644
 --- a/kernel/proc.h
 +++ b/kernel/proc.h
-@@ -91,6 +91,7 @@ struct proc {
+@@ -91,6 +91,8 @@ struct proc {
    int killed;                  // If non-zero, have been killed
    int xstate;                  // Exit status to be returned to parent's wait
    int pid;                     // Process ID
 +  char prev_cmd[100];          // Previous command (100 because sh uses a cmd buffer of same size)
++  struct cmd_history history;   // History of commands
  
    // wait_lock must be held when using this:
    struct proc *parent;         // Parent process
-@@ -104,4 +105,5 @@ struct proc {
+@@ -104,4 +106,5 @@ struct proc {
    struct file *ofile[NOFILE];  // Open files
    struct inode *cwd;           // Current directory
    char name[16];               // Process name (debugging)
 +  int traced_syscall_number;   // Trace syscall by number
  };
 diff --git a/kernel/syscall.c b/kernel/syscall.c
-index ed65409..2836751 100644
+index ed65409..0729c52 100644
 --- a/kernel/syscall.c
 +++ b/kernel/syscall.c
 @@ -59,6 +59,15 @@ argint(int n, int *ip)
@@ -234,7 +318,7 @@ index ed65409..2836751 100644
  // Prototypes for the functions that handle system calls.
  extern uint64 sys_fork(void);
  extern uint64 sys_exit(void);
-@@ -101,6 +140,12 @@ extern uint64 sys_unlink(void);
+@@ -101,6 +140,14 @@ extern uint64 sys_unlink(void);
  extern uint64 sys_link(void);
  extern uint64 sys_mkdir(void);
  extern uint64 sys_close(void);
@@ -244,10 +328,12 @@ index ed65409..2836751 100644
 +extern uint64 sys_info(void);
 +extern uint64 sys_setprevcmd(void);
 +extern uint64 sys_getprevcmd(void);
++extern uint64 sys_addcmdtohistory(void);
++extern uint64 sys_getnthcmdfromhistory(void);
  
  // An array mapping syscall numbers from syscall.h
  // to the function that handles the system call.
-@@ -126,6 +171,43 @@ static uint64 (*syscalls[])(void) = {
+@@ -126,6 +173,47 @@ static uint64 (*syscalls[])(void) = {
  [SYS_link]    sys_link,
  [SYS_mkdir]   sys_mkdir,
  [SYS_close]   sys_close,
@@ -257,6 +343,8 @@ index ed65409..2836751 100644
 +[SYS_info]    sys_info,
 +[SYS_setprevcmd] sys_setprevcmd,
 +[SYS_getprevcmd] sys_getprevcmd,
++[SYS_addcmdtohistory] sys_addcmdtohistory,
++[SYS_getnthcmdfromhistory] sys_getnthcmdfromhistory,
 +};
 +
 +// Array mapping syscall numbers to their names
@@ -288,10 +376,12 @@ index ed65409..2836751 100644
 +[SYS_info]   = "info",
 +[SYS_setprevcmd] = "setprevcmd",
 +[SYS_getprevcmd] = "getprevcmd",
++[SYS_addcmdtohistory] = "addcommandtohistory",
++[SYS_getnthcmdfromhistory] = "getnthcommandfromhistory",
  };
  
  void
-@@ -138,10 +220,104 @@ syscall(void)
+@@ -138,10 +226,110 @@ syscall(void)
    if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
      // Use num to lookup the system call function for num, call it,
      // and store its return value in p->trapframe->a0
@@ -379,7 +469,8 @@ index ed65409..2836751 100644
 +    case SYS_mkdir:
 +    case SYS_chdir:
 +    case SYS_setprevcmd:
-+        print_argstr(0);  // Path
++    case SYS_addcmdtohistory:
++        print_argstr(0);  // Path / cmd
 +        break;
 +    case SYS_fstat:
 +        print_argint(0);  // File descriptor
@@ -391,16 +482,21 @@ index ed65409..2836751 100644
 +        printf(", ");
 +        print_argstr(1);  // New path
 +        break;
++    case SYS_getnthcmdfromhistory:
++        print_argaddr(0); // Buffer address
++        printf(", ");
++        print_argint(1);  // Index
++        break;
 +    default:
 +        // Unhandled syscall, do nothing
 +        break;
 +  }
 +}
 diff --git a/kernel/syscall.h b/kernel/syscall.h
-index bc5f356..92338a8 100644
+index bc5f356..b412650 100644
 --- a/kernel/syscall.h
 +++ b/kernel/syscall.h
-@@ -20,3 +20,9 @@
+@@ -20,3 +20,11 @@
  #define SYS_link   19
  #define SYS_mkdir  20
  #define SYS_close  21
@@ -410,11 +506,13 @@ index bc5f356..92338a8 100644
 +#define SYS_info   25
 +#define SYS_setprevcmd 26
 +#define SYS_getprevcmd 27
++#define SYS_addcmdtohistory 28
++#define SYS_getnthcmdfromhistory 29
 diff --git a/kernel/sysproc.c b/kernel/sysproc.c
-index 3b4d5bd..cd48efb 100644
+index 3b4d5bd..db24ef5 100644
 --- a/kernel/sysproc.c
 +++ b/kernel/sysproc.c
-@@ -91,3 +91,51 @@ sys_uptime(void)
+@@ -91,3 +91,69 @@ sys_uptime(void)
    release(&tickslock);
    return xticks;
  }
@@ -466,11 +564,29 @@ index 3b4d5bd..cd48efb 100644
 +  argaddr(0, (uint64 *)&userprevcmd);
 +  return getprevcmd(userprevcmd);
 +}
++
++uint64
++sys_addcmdtohistory(void)
++{
++  char prevcmd[MAXCMD];
++  argstr(0, prevcmd, MAXCMD);
++  return addcmdtohistory(prevcmd);
++}
++
++uint64
++sys_getnthcmdfromhistory(void)
++{
++  char *userprevcmd;
++  argaddr(0, (uint64 *)&userprevcmd);
++  int n;
++  argint(1, &n);
++  return getnthcmdfromhistory(userprevcmd, n);
++}
 diff --git a/kernel/types.h b/kernel/types.h
-index ee73164..c435fee 100644
+index ee73164..88633da 100644
 --- a/kernel/types.h
 +++ b/kernel/types.h
-@@ -8,3 +8,10 @@ typedef unsigned int  uint32;
+@@ -8,3 +8,20 @@ typedef unsigned int  uint32;
  typedef unsigned long uint64;
  
  typedef uint64 pde_t;
@@ -481,6 +597,16 @@ index ee73164..c435fee 100644
 +  int memsize; // in bytes; summation of all active process 
 +  int totalMemSize; // in bytes; all available physical Memory
 +} procInfo;
++
++typedef struct cmd_node {
++  char command[100]; // Store the command string (up to 100 chars)
++  struct cmd_node *next; // Pointer to the next node (previous command)
++} cmd_node ;
++
++typedef struct cmd_history {
++  struct cmd_node *head;    // Head of the linked list (most recent command)
++  int size;                 // Keep track of the number of commands in the history
++} cmd_history;
 \ No newline at end of file
 diff --git a/user/clear.c b/user/clear.c
 new file mode 100644
@@ -696,28 +822,50 @@ index 0000000..eb3cf1a
 +}
 \ No newline at end of file
 diff --git a/user/sh.c b/user/sh.c
-index 836ebcb..dbcb744 100644
+index 836ebcb..c00f064 100644
 --- a/user/sh.c
 +++ b/user/sh.c
-@@ -142,6 +142,17 @@ getcmd(char *buf, int nbuf)
+@@ -142,6 +142,39 @@ getcmd(char *buf, int nbuf)
    return 0;
  }
  
++int 
++parse_positive_integer(char *buf, int *result) 
++{
++  char *ptr = buf + 2;
++  while (*ptr && (*ptr == ' ' || *ptr == '\t')) ptr++;
++  if (*ptr == '\0') return 0;
++  char *num_end = ptr;
++  while (*num_end && is_digit(*num_end)) num_end++;
++  if (num_end == ptr) return 0;
++  *num_end = '\0';
++  *result = atoi(ptr);
++  return 1;
++}
++
 +void
 +handle_prev_cmd(char *buf)
 +{
 +  if(buf[0] == '!' && buf[1] == '!') {
-+    getprevcmd(buf);
++    int n;
++    if(parse_positive_integer(buf, &n)) {
++      getnthcmdfromhistory(buf, n);
++      setprevcmd(buf);
++      addcmdtohistory(buf);
++    } else {
++      getprevcmd(buf);
++    }
 +    printf("%s", buf);
 +  } else {
 +    setprevcmd(buf);
++    addcmdtohistory(buf);
 +  }
 +}
 +
  int
  main(void)
  {
-@@ -165,6 +176,7 @@ main(void)
+@@ -165,6 +198,7 @@ main(void)
          fprintf(2, "cannot cd %s\n", buf+3);
        continue;
      }
@@ -772,8 +920,22 @@ index 0000000..0795cf7
 +
 +    exit(1);
 +}
+diff --git a/user/ulib.c b/user/ulib.c
+index c7b66c4..d85853a 100644
+--- a/user/ulib.c
++++ b/user/ulib.c
+@@ -145,3 +145,9 @@ memcpy(void *dst, const void *src, uint n)
+ {
+   return memmove(dst, src, n);
+ }
++
++int
++is_digit(char c) 
++{
++  return c >= '0' && c <= '9';
++}
 diff --git a/user/user.h b/user/user.h
-index 04013ca..ec7e188 100644
+index 04013ca..10a140d 100644
 --- a/user/user.h
 +++ b/user/user.h
 @@ -1,4 +1,5 @@
@@ -782,7 +944,7 @@ index 04013ca..ec7e188 100644
  
  // system calls
  int fork(void);
-@@ -22,6 +23,12 @@ int getpid(void);
+@@ -22,6 +23,14 @@ int getpid(void);
  char* sbrk(int);
  int sleep(int);
  int uptime(void);
@@ -792,14 +954,21 @@ index 04013ca..ec7e188 100644
 +int info(struct procInfo*);
 +int setprevcmd(char*);
 +int getprevcmd(char*);
++int addcmdtohistory(char*);
++int getnthcmdfromhistory(char*, int);
  
  // ulib.c
  int stat(const char*, struct stat*);
+@@ -39,3 +48,4 @@ void free(void*);
+ int atoi(const char*);
+ int memcmp(const void *, const void *, uint);
+ void *memcpy(void *, const void *, uint);
++int is_digit(char);
 diff --git a/user/usys.pl b/user/usys.pl
-index 01e426e..fc5ea0f 100755
+index 01e426e..f9541a2 100755
 --- a/user/usys.pl
 +++ b/user/usys.pl
-@@ -36,3 +36,9 @@ entry("getpid");
+@@ -36,3 +36,11 @@ entry("getpid");
  entry("sbrk");
  entry("sleep");
  entry("uptime");
@@ -809,3 +978,5 @@ index 01e426e..fc5ea0f 100755
 +entry("info");
 +entry("setprevcmd");
 +entry("getprevcmd");
++entry("addcmdtohistory");
++entry("getnthcmdfromhistory");
