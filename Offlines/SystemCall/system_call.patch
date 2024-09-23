@@ -15,20 +15,29 @@ index 62fd0f8..078a709 100644
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..ce02555 100644
+index d1b6bb9..f3c8fac 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
-@@ -106,6 +106,9 @@ void            yield(void);
+@@ -8,6 +8,7 @@ struct spinlock;
+ struct sleeplock;
+ struct stat;
+ struct superblock;
++struct procInfo;
+ 
+ // bio.c
+ void            binit(void);
+@@ -106,6 +107,10 @@ void            yield(void);
  int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
  int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
  void            procdump(void);
 +int             getuid(void);
 +int             setuid(int);
 +int             trace(int);
++int             info(struct procInfo*);
  
  // swtch.S
  void            swtch(struct context*, struct context*);
-@@ -140,6 +143,11 @@ void            argaddr(int, uint64 *);
+@@ -140,6 +145,11 @@ void            argaddr(int, uint64 *);
  int             fetchstr(uint64, char*, int);
  int             fetchaddr(uint64, uint64*);
  void            syscall();
@@ -36,12 +45,12 @@ index d1b6bb9..ce02555 100644
 +void            print_argint(int);
 +void            print_argstr(int);
 +void            print_argaddr(int);
-+void            print_args();
++void            print_args(int);
  
  // trap.c
  extern uint     ticks;
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..a24a66b 100644
+index 58a8a0b..3869cfd 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -169,6 +169,7 @@ freeproc(struct proc *p)
@@ -52,7 +61,7 @@ index 58a8a0b..a24a66b 100644
  }
  
  // Create a user page table for a given process, with no user memory,
-@@ -686,3 +687,26 @@ procdump(void)
+@@ -686,3 +687,54 @@ procdump(void)
      printf("\n");
    }
  }
@@ -73,10 +82,38 @@ index 58a8a0b..a24a66b 100644
 +  return 0;
 +}
 +
-+int trace(int syscall_number)
++int 
++trace(int syscall_number)
 +{
 +  struct proc *p = myproc();
 +  p->traced_syscall_number = syscall_number;
++  return 0;
++}
++
++int
++info(struct procInfo *user_procinfo)
++{
++  struct procInfo kernel_procinfo;
++  struct proc *p;
++  int total_mem = 0;
++  int active_proc = 0;
++  
++  // Initialize totalMemSize to the available memory: PHYSTOP - KERNBASE
++  kernel_procinfo.totalMemSize = PHYSTOP - KERNBASE;
++  
++  for(p = proc; p < &proc[NPROC]; p++) {
++    acquire(&p->lock);
++    if (p->state == RUNNING || p->state == RUNNABLE) {
++      active_proc++;
++      total_mem += p->sz;
++    }
++    release(&p->lock);
++  }
++  kernel_procinfo.activeProcess = active_proc;
++  kernel_procinfo.totalProcess = NPROC;
++  kernel_procinfo.memsize = total_mem;
++  if (copyout(myproc()->pagetable, (uint64)user_procinfo, (char *)&kernel_procinfo, sizeof(kernel_procinfo)) < 0)
++    return -1;
 +  return 0;
 +}
 diff --git a/kernel/proc.h b/kernel/proc.h
@@ -308,21 +345,22 @@ index ed65409..21bbfc1 100644
 +    }
 +}
 diff --git a/kernel/syscall.h b/kernel/syscall.h
-index bc5f356..f8a9ddd 100644
+index bc5f356..dae33a2 100644
 --- a/kernel/syscall.h
 +++ b/kernel/syscall.h
-@@ -20,3 +20,6 @@
+@@ -20,3 +20,7 @@
  #define SYS_link   19
  #define SYS_mkdir  20
  #define SYS_close  21
 +#define SYS_getuid 22
 +#define SYS_setuid 23
 +#define SYS_trace  24
++#define SYS_info   25
 diff --git a/kernel/sysproc.c b/kernel/sysproc.c
-index 3b4d5bd..53064a7 100644
+index 3b4d5bd..b8f3eff 100644
 --- a/kernel/sysproc.c
 +++ b/kernel/sysproc.c
-@@ -91,3 +91,27 @@ sys_uptime(void)
+@@ -91,3 +91,35 @@ sys_uptime(void)
    release(&tickslock);
    return xticks;
  }
@@ -350,6 +388,30 @@ index 3b4d5bd..53064a7 100644
 +  argint(0, &syscall_num);
 +  return trace(syscall_num);
 +}
++
++uint64
++sys_info(void)
++{
++  struct procInfo *user_procinfo;
++  argaddr(0, (uint64 *)&user_procinfo);
++  return info(user_procinfo);
++}
+diff --git a/kernel/types.h b/kernel/types.h
+index ee73164..c435fee 100644
+--- a/kernel/types.h
++++ b/kernel/types.h
+@@ -8,3 +8,10 @@ typedef unsigned int  uint32;
+ typedef unsigned long uint64;
+ 
+ typedef uint64 pde_t;
++
++typedef struct procInfo { 
++  int activeProcess; // # of processes in RUNNABLE and RUNNING state
++  int totalProcess; // # of total possible processes
++  int memsize; // in bytes; summation of all active process 
++  int totalMemSize; // in bytes; all available physical Memory
++} procInfo;
+\ No newline at end of file
 diff --git a/user/clear.c b/user/clear.c
 new file mode 100644
 index 0000000..779740f
@@ -366,13 +428,15 @@ index 0000000..779740f
 \ No newline at end of file
 diff --git a/user/load.c b/user/load.c
 new file mode 100644
-index 0000000..e288a34
+index 0000000..c6d347a
 --- /dev/null
 +++ b/user/load.c
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,157 @@
 +#ifndef CHILD_SLEEP_TIME
-+#define CHILD_SLEEP_TIME 10
-+#define PARENT_SLEEP_TIME (2 * CHILD_SLEEP_TIME)
++#define CHILD_SLEEP_TIME 600
++#endif
++#ifndef CONSOLE_SLEEP
++#define CONSOLE_SLEEP 8
 +#endif
 +
 +#include "kernel/types.h"
@@ -391,50 +455,139 @@ index 0000000..e288a34
 +    return 1;
 +}
 +
-+void generate_child_proc(int child_count, int allocation_amount) {
++int* create_children(int child_count, int allocation_amount, int pipe_fd[2]) {
++    int *child_pids = (int *)malloc(child_count * sizeof(int));
++    if (child_pids == 0) {
++        printf("Failed to allocate memory for child pids.\n");
++        exit(1);
++    }
 +    printf("Parent going to sleep.\n");
 +    for (int i = 0; i < child_count; i++) {
 +        int pid = fork();
-+        sleep(1); // For clean console output
++        sleep(CONSOLE_SLEEP); // For clean console output
 +        if (pid < 0) {
 +            // Fork failed
 +            printf("Fork failed\n");
-+            exit(1);
 +        } 
 +        else if (pid == 0) {
 +            // Child process
++            close(pipe_fd[0]); // Close read end of the pipe in the child
 +            printf("Child is created.\n");
-+            malloc(allocation_amount);
-+            printf("Child allocated %d byte.\n", allocation_amount);
++            void *allocated_memory = malloc(allocation_amount);
++            if (allocated_memory == 0) {
++                printf("Child failed to allocate %d bytes.\n", allocation_amount);
++            } else {
++                printf("Child allocated %d bytes.\n", allocation_amount);
++            }
++            write(pipe_fd[1], "1", 1);
++            close(pipe_fd[1]);
 +            printf("Child going to sleep.\n");
-+            sleep(CHILD_SLEEP_TIME);
-+            exit(0);
++            sleep(CHILD_SLEEP_TIME); // child sleeping
++            // while(1); // child running
++            printf("Child waking up.\n");
++        } else {
++            child_pids[i] = pid;
 +        }
 +    }
-+    sleep(PARENT_SLEEP_TIME);
++    return child_pids;
++}
++
++void wait_for_children(int child_count, int pipe_fd[2]) {
++    // Parent waits for all children to allocate memory
++    sleep(1);
++    close(pipe_fd[1]); // Close write end of the pipe in the parent
++    char buffer[1];
++    int i = 0;
++    for (i = 0; i < child_count; i++) {
++        while(buffer[0] != '1') read(pipe_fd[0], buffer, 1); // Wait for a message from each child
++        buffer[0] = '\0';
++    }
++    close(pipe_fd[0]); // Close read end after receiving all confirmations
 +    printf("Parent wake up.\n");
 +}
 +
-+int main(int argc, char *argv[]) {
++// Helper function to print the integer and fractional part of a memory size
++void print_memory_size(int whole_part, int decimal_part, int decimal_precision) {
++    printf("%d.", whole_part);
++    int divisor = 1;
++    for (int i = 0; i < decimal_precision - 1; i++) {
++        divisor *= 10;
++    }
++    int temp = decimal_part;
++    while (divisor > 1 && temp < divisor) {
++        printf("0");
++        divisor /= 10;
++    }
++    printf("%d", decimal_part);
++}
++
++void display_sys_info() {
++    // Allocate memory for the struct procInfo in user space
++    struct procInfo* user_procinfo = (struct procInfo *)malloc(sizeof(struct procInfo));
++    // Call the 'info' system call to get the process information
++    if (info(user_procinfo) < 0) {
++        printf("Failed to get system info.\n");
++        free(user_procinfo);
++        return;
++    }
++    int active_process_memsize_in_kb = user_procinfo->memsize >> 10;
++    int total_memsize_in_mb = user_procinfo->totalMemSize >> 20;
++    // Calculate decimal places for active process memory (for 2 decimal places)
++    int whole_part = active_process_memsize_in_kb >> 10;
++    int decimal_part = ((active_process_memsize_in_kb % 1024) * 10000) >> 10; // Scale to get 4 decimal places
++    // Print the system information
++    printf("Current system information:\n");
++    printf("Processes: %d/%d\n", user_procinfo->activeProcess, user_procinfo->totalProcess);
++    printf("RAM: ");
++    print_memory_size(whole_part, decimal_part, 4);
++    printf("/%d (in MB)\n", total_memsize_in_mb);
++    // printf("RAM: %d/%d (in B)\n", user_procinfo->memsize, user_procinfo->totalMemSize);
++    // Free the dynamically allocated memory after use
++    free(user_procinfo);
++}
++
++void kill_children(int* child_pids, int child_count) {
++    for (int i = 0; i < child_count; i++) {
++        if (kill(child_pids[i]) < 0) {
++            printf("Failed to kill child with pid %d\n", child_pids[i]);
++        } 
++        // else {
++        //     printf("Killed child with pid %d\n", child_pids[i]);
++        // }
++    }
++}
++
++void input_validation(int argc, char* argv[]) {
 +    if (argc != 3) {
-+        fprintf(2, "Usage: load <child_count> <allocation_amount> \n");
++        fprintf(2, "Usage: load <child_count> <allocation_amount>\n");
 +        exit(1);
 +    }
-+
 +    if (!is_valid_number(argv[1])) {
 +        fprintf(2, "Error: Invalid child_count '%s'.\n", argv[1]);
 +        exit(1);
 +    }
-+
 +    if (!is_valid_number(argv[2])) {
 +        fprintf(2, "Error: Invalid allocation_amount '%s'.\n", argv[2]);
 +        exit(1);
 +    }
++}
 +
++int main(int argc, char *argv[]) {
++    input_validation(argc, argv);
 +    int child_count = atoi(argv[1]);
 +    int allocation_amount = atoi(argv[2]);
-+
-+    generate_child_proc(child_count, allocation_amount);
++    // Create a pipe for communication between parent and children
++    int pipe_fd[2];
++    if (pipe(pipe_fd) < 0) {
++        printf("Pipe creation failed\n");
++        exit(1);
++    }
++    int* child_pids = create_children(child_count, allocation_amount, pipe_fd);
++    wait_for_children(child_count, pipe_fd);
++    display_sys_info();
++    kill_children(child_pids, child_count);
++    free(child_pids);
++    return 0;
 +}
 diff --git a/user/print_uid.c b/user/print_uid.c
 new file mode 100644
@@ -520,27 +673,35 @@ index 0000000..0795cf7
 +    exit(1);
 +}
 diff --git a/user/user.h b/user/user.h
-index 04013ca..ddc4a63 100644
+index 04013ca..a7dfb2f 100644
 --- a/user/user.h
 +++ b/user/user.h
-@@ -22,6 +22,9 @@ int getpid(void);
+@@ -1,4 +1,5 @@
+ struct stat;
++struct procInfo;
+ 
+ // system calls
+ int fork(void);
+@@ -22,6 +23,10 @@ int getpid(void);
  char* sbrk(int);
  int sleep(int);
  int uptime(void);
 +int getuid(void);
 +int setuid(int);
 +int trace(int);
++int info(struct procInfo*);
  
  // ulib.c
  int stat(const char*, struct stat*);
 diff --git a/user/usys.pl b/user/usys.pl
-index 01e426e..8e022ce 100755
+index 01e426e..78543fd 100755
 --- a/user/usys.pl
 +++ b/user/usys.pl
-@@ -36,3 +36,6 @@ entry("getpid");
+@@ -36,3 +36,7 @@ entry("getpid");
  entry("sbrk");
  entry("sleep");
  entry("uptime");
 +entry("getuid");
 +entry("setuid");
 +entry("trace");
++entry("info");
