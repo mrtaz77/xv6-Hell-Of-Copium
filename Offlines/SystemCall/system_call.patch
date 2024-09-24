@@ -15,7 +15,7 @@ index 62fd0f8..078a709 100644
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..6479034 100644
+index d1b6bb9..32466c8 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
 @@ -8,6 +8,7 @@ struct spinlock;
@@ -34,7 +34,7 @@ index d1b6bb9..6479034 100644
 +int             setuid(int);
 +int             trace(int);
 +int             info(struct procInfo*);
-+int             addcmdtohistory(char*);
++int             addcmdtohistory(const char*);
 +int             getnthcmdfromhistory(char*, int);
  
  // swtch.S
@@ -61,7 +61,7 @@ index 6624bff..304064f 100644
  #define MAXPATH      128   // maximum file path name
 +#define MAXCMD       100 // maximum length of command
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..f15e51b 100644
+index 58a8a0b..24eb21d 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -125,6 +125,10 @@ found:
@@ -172,7 +172,7 @@ index 58a8a0b..f15e51b 100644
 +}
 +
 +int
-+addcmdtohistory(char *prevcmd)
++addcmdtohistory(const char *prevcmd)
 +{
 +  struct proc *p = myproc();
 +  struct cmd_node *new_node = (struct cmd_node*)kalloc();
@@ -228,7 +228,7 @@ index d021857..3034950 100644
 +  int traced_syscall_number;   // Trace syscall by number
  };
 diff --git a/kernel/syscall.c b/kernel/syscall.c
-index ed65409..04680c8 100644
+index ed65409..1980b5c 100644
 --- a/kernel/syscall.c
 +++ b/kernel/syscall.c
 @@ -59,6 +59,15 @@ argint(int n, int *ip)
@@ -393,11 +393,9 @@ index ed65409..04680c8 100644
 +        print_argint(0);  // Exit status
 +        break;
 +    case SYS_wait:
-+        print_argaddr(0); // Pointer to store exit status
-+        break;
 +    case SYS_pipe:
 +    case SYS_info:
-+        print_argaddr(0); // Pipe file descriptors / Buffer address
++        print_argaddr(0); // Pointer to store exit status/ Pipe file descriptors / Buffer address
 +        break;
 +    case SYS_read:
 +    case SYS_write:
@@ -427,9 +425,11 @@ index ed65409..04680c8 100644
 +        print_argint(1);  // Flags
 +        break;
 +    case SYS_mknod:
-+        print_argint(0);  // Device number
++        print_argstr(0); 
 +        printf(", ");
-+        print_argint(1);  // File type
++        print_argint(1);
++        printf(", ");
++        print_argint(2);
 +        break;
 +    case SYS_unlink:
 +    case SYS_mkdir:
@@ -880,7 +880,7 @@ index c7b66c4..d85853a 100644
 +  return c >= '0' && c <= '9';
 +}
 diff --git a/user/user.h b/user/user.h
-index 04013ca..fb91fa7 100644
+index 04013ca..9f1f988 100644
 --- a/user/user.h
 +++ b/user/user.h
 @@ -1,4 +1,5 @@
@@ -897,7 +897,7 @@ index 04013ca..fb91fa7 100644
 +int setuid(int);
 +int trace(int);
 +int info(struct procInfo*);
-+int addcmdtohistory(char*);
++int addcmdtohistory(const char*);
 +int getnthcmdfromhistory(char*, int);
  
  // ulib.c
