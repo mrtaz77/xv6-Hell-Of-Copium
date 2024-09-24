@@ -822,7 +822,7 @@ index 0000000..eb3cf1a
 +}
 \ No newline at end of file
 diff --git a/user/sh.c b/user/sh.c
-index 836ebcb..c00f064 100644
+index 836ebcb..d14cf2d 100644
 --- a/user/sh.c
 +++ b/user/sh.c
 @@ -142,6 +142,39 @@ getcmd(char *buf, int nbuf)
@@ -851,7 +851,7 @@ index 836ebcb..c00f064 100644
 +    if(parse_positive_integer(buf, &n)) {
 +      getnthcmdfromhistory(buf, n);
 +      setprevcmd(buf);
-+      addcmdtohistory(buf);
++      if(n > 1)addcmdtohistory(buf);
 +    } else {
 +      getprevcmd(buf);
 +    }
