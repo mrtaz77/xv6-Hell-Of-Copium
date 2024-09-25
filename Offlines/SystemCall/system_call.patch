@@ -228,7 +228,7 @@ index d021857..3034950 100644
 +  int traced_syscall_number;   // Trace syscall by number
  };
 diff --git a/kernel/syscall.c b/kernel/syscall.c
-index ed65409..1980b5c 100644
+index ed65409..3ae4b6a 100644
 --- a/kernel/syscall.c
 +++ b/kernel/syscall.c
 @@ -59,6 +59,15 @@ argint(int n, int *ip)
@@ -247,7 +247,7 @@ index ed65409..1980b5c 100644
  // Retrieve an argument as a pointer.
  // Doesn't check for legality, since
  // copyin/copyout will do that.
-@@ -68,6 +77,27 @@ argaddr(int n, uint64 *ip)
+@@ -68,6 +77,15 @@ argaddr(int n, uint64 *ip)
    *ip = argraw(n);
  }
  
@@ -257,25 +257,13 @@ index ed65409..1980b5c 100644
 +{
 +  uint64 addr_arg;
 +  argaddr(n, &addr_arg);
-+  char hex_digits[] = "0123456789abcdef";
-+  char buffer[17]; // Buffer to store the hex representation, 16 hex digits + '\0'
-+  
-+  buffer[16] = '\0';  // Null-terminate the string
-+
-+  // Fill the buffer with the hexadecimal representation, starting from the least significant digit
-+  for (int i = 15; i >= 0; i--) {
-+      buffer[i] = hex_digits[addr_arg & 0xF]; // Get the last 4 bits (one hex digit)
-+      addr_arg >>= 4;  // Shift the address by 4 bits to the right (i.e., divide by 16)
-+  }
-+
-+  // Print the result with the '0x' prefix
-+  printf("0x%s", buffer);
++  printf("%p", (uint64 *)addr_arg);
 +}
 +
  // Fetch the nth word-sized system call argument as a null-terminated string.
  // Copies into buf, at most max.
  // Returns string length if OK (including nul), -1 if error.
-@@ -79,6 +109,15 @@ argstr(int n, char *buf, int max)
+@@ -79,6 +97,15 @@ argstr(int n, char *buf, int max)
    return fetchstr(addr, buf, max);
  }
  
@@ -291,7 +279,7 @@ index ed65409..1980b5c 100644
  // Prototypes for the functions that handle system calls.
  extern uint64 sys_fork(void);
  extern uint64 sys_exit(void);
-@@ -101,6 +140,12 @@ extern uint64 sys_unlink(void);
+@@ -101,6 +128,12 @@ extern uint64 sys_unlink(void);
  extern uint64 sys_link(void);
  extern uint64 sys_mkdir(void);
  extern uint64 sys_close(void);
@@ -304,7 +292,7 @@ index ed65409..1980b5c 100644
  
  // An array mapping syscall numbers from syscall.h
  // to the function that handles the system call.
-@@ -126,6 +171,43 @@ static uint64 (*syscalls[])(void) = {
+@@ -126,6 +159,43 @@ static uint64 (*syscalls[])(void) = {
  [SYS_link]    sys_link,
  [SYS_mkdir]   sys_mkdir,
  [SYS_close]   sys_close,
@@ -348,7 +336,7 @@ index ed65409..1980b5c 100644
  };
  
  void
-@@ -138,10 +220,108 @@ syscall(void)
+@@ -138,10 +208,108 @@ syscall(void)
    if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
      // Use num to lookup the system call function for num, call it,
      // and store its return value in p->trapframe->a0
