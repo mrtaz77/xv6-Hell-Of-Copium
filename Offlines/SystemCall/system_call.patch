@@ -808,50 +808,29 @@ index 836ebcb..4cc1f52 100644
      wait(0);
 diff --git a/user/trace.c b/user/trace.c
 new file mode 100644
-index 0000000..0795cf7
+index 0000000..e63493f
 --- /dev/null
 +++ b/user/trace.c
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,20 @@
++#include "kernel/param.h"
 +#include "kernel/types.h"
++#include "kernel/stat.h"
 +#include "user/user.h"
-+#include "kernel/fcntl.h"
-+
-+int is_valid_number(const char *str) {
-+    if (str == 0 || *str == '\0') {
-+        return 0;
-+    }
-+    for (int i = 0; str[i] != '\0'; i++) {
-+        if (str[i] < '0' || str[i] > '9') {
-+            return 0;
-+        }
-+    }
-+    return 1;
-+}
 +
 +int main(int argc, char *argv[]) {
-+    if (argc < 3) {
-+        fprintf(2, "Usage: trace <sys_call_number> <command> [<args>...]\n");
++    int i;
++    char *nargv[MAXARG];
++    if (argc < 3 || (argv[1][0] < '0' || argv[1][0] > '9')) {
++        fprintf(2, "Usage: %s sys_call_num command\n", argv[0]);
 +        exit(1);
 +    }
-+
-+    if (!is_valid_number(argv[1])) {
-+        fprintf(2, "Error: Invalid system call number '%s'.\n", argv[1]);
++    if (trace(atoi(argv[1])) < 0) {
++        fprintf(2, "%s: trace failed\n", argv[0]);
 +        exit(1);
 +    }
-+
-+    int syscall_number = atoi(argv[1]);
-+
-+    if (trace(syscall_number) < 0) {
-+        fprintf(2, "Error: Failed to trace system call number: %d\n", syscall_number);
-+        exit(1);
-+    }
-+
-+    if (exec(argv[2], &argv[2]) < 0) {
-+        fprintf(2, "Error: Exec failed for command '%s'\n", argv[2]);
-+        exit(1);
-+    }
-+
-+    exit(1);
++    for (i = 2; i < argc && i < MAXARG; i++) nargv[i - 2] = argv[i];
++    exec(nargv[0], nargv);
++    exit(0);
 +}
 diff --git a/user/ulib.c b/user/ulib.c
 index c7b66c4..d85853a 100644
