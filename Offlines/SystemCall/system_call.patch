@@ -61,18 +61,19 @@ index 6624bff..304064f 100644
  #define MAXPATH      128   // maximum file path name
 +#define MAXCMD       100 // maximum length of command
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..60674da 100644
+index 58a8a0b..b9924c8 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
-@@ -17,6 +17,7 @@ struct spinlock pid_lock;
+@@ -17,6 +17,8 @@ struct spinlock pid_lock;
  
  extern void forkret(void);
  static void freeproc(struct proc *p);
-+static void free_command_history(struct proc *p); 
++static void free_command_history(struct proc *p);
++static void copy_cmd_history(cmd_history *parent_history, cmd_history *child_history);
  
  extern char trampoline[]; // trampoline.S
  
-@@ -125,6 +126,10 @@ found:
+@@ -125,6 +127,10 @@ found:
    p->pid = allocpid();
    p->state = USED;
  
@@ -83,7 +84,7 @@ index 58a8a0b..60674da 100644
    // Allocate a trapframe page.
    if((p->trapframe = (struct trapframe *)kalloc()) == 0){
      freeproc(p);
-@@ -149,6 +154,20 @@ found:
+@@ -149,6 +155,20 @@ found:
    return p;
  }
  
@@ -104,7 +105,7 @@ index 58a8a0b..60674da 100644
  // free a proc structure and the data hanging from it,
  // including user pages.
  // p->lock must be held.
-@@ -169,6 +188,8 @@ freeproc(struct proc *p)
+@@ -169,6 +189,8 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
@@ -113,7 +114,16 @@ index 58a8a0b..60674da 100644
  }
  
  // Create a user page table for a given process, with no user memory,
-@@ -322,6 +343,9 @@ fork(void)
+@@ -312,6 +334,8 @@ fork(void)
+ 
+   pid = np->pid;
+ 
++  copy_cmd_history(&p->history, &np->history);
++
+   release(&np->lock);
+ 
+   acquire(&wait_lock);
+@@ -322,6 +346,9 @@ fork(void)
    np->state = RUNNABLE;
    release(&np->lock);
  
@@ -123,7 +133,7 @@ index 58a8a0b..60674da 100644
    return pid;
  }
  
-@@ -686,3 +710,93 @@ procdump(void)
+@@ -686,3 +713,121 @@ procdump(void)
      printf("\n");
    }
  }
@@ -216,6 +226,34 @@ index 58a8a0b..60674da 100644
 +  }
 +  release(&p->lock);
 +  return 0;
++}
++
++// Helper function to copy the parent's command history to the child
++static void
++copy_cmd_history(cmd_history *parent_history, cmd_history *child_history) 
++{
++  child_history->head = 0;
++  child_history->size = 0;
++
++  if (parent_history->head == 0) return;
++
++  cmd_node *parent_node = parent_history->head;
++  cmd_node *prev_child_node = 0;
++
++  while (parent_node != 0) {
++    cmd_node *new_child_node = (cmd_node *)kalloc();
++    if (new_child_node == 0) panic("Failed to allocate memory for command history in child process");
++
++    safestrcpy(new_child_node->command, parent_node->command, sizeof(new_child_node->command));
++    new_child_node->next = 0;
++
++    if (prev_child_node == 0) child_history->head = new_child_node;
++    else prev_child_node->next = new_child_node;
++
++    prev_child_node = new_child_node;
++    parent_node = parent_node->next;
++    child_history->size++;
++  }
 +}
 diff --git a/kernel/proc.h b/kernel/proc.h
 index d021857..3034950 100644
