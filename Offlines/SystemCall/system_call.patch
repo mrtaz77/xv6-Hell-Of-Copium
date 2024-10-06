@@ -61,10 +61,18 @@ index 6624bff..304064f 100644
  #define MAXPATH      128   // maximum file path name
 +#define MAXCMD       100 // maximum length of command
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..24eb21d 100644
+index 58a8a0b..60674da 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
-@@ -125,6 +125,10 @@ found:
+@@ -17,6 +17,7 @@ struct spinlock pid_lock;
+ 
+ extern void forkret(void);
+ static void freeproc(struct proc *p);
++static void free_command_history(struct proc *p); 
+ 
+ extern char trampoline[]; // trampoline.S
+ 
+@@ -125,6 +126,10 @@ found:
    p->pid = allocpid();
    p->state = USED;
  
@@ -75,7 +83,7 @@ index 58a8a0b..24eb21d 100644
    // Allocate a trapframe page.
    if((p->trapframe = (struct trapframe *)kalloc()) == 0){
      freeproc(p);
-@@ -149,6 +153,20 @@ found:
+@@ -149,6 +154,20 @@ found:
    return p;
  }
  
@@ -96,7 +104,7 @@ index 58a8a0b..24eb21d 100644
  // free a proc structure and the data hanging from it,
  // including user pages.
  // p->lock must be held.
-@@ -169,6 +187,8 @@ freeproc(struct proc *p)
+@@ -169,6 +188,8 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
@@ -105,7 +113,7 @@ index 58a8a0b..24eb21d 100644
  }
  
  // Create a user page table for a given process, with no user memory,
-@@ -322,6 +342,9 @@ fork(void)
+@@ -322,6 +343,9 @@ fork(void)
    np->state = RUNNABLE;
    release(&np->lock);
  
@@ -115,7 +123,7 @@ index 58a8a0b..24eb21d 100644
    return pid;
  }
  
-@@ -686,3 +709,93 @@ procdump(void)
+@@ -686,3 +710,93 @@ procdump(void)
      printf("\n");
    }
  }
