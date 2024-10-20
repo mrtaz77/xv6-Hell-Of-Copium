@@ -1,7 +1,7 @@
 #!/bin/bash
 
 patch_file_name="B1_soln"
-output_dir=".."
+output_dir="../Onlines/SystemCall/B1/"
 
 cd xv6-riscv || {
 	echo "xv6-riscv dir not found!"

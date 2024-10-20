@@ -65,7 +65,7 @@ index 6624bff..304064f 100644
  #define MAXPATH      128   // maximum file path name
 +#define MAXCMD       100 // maximum length of command
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..04ae937 100644
+index 58a8a0b..aa78a09 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -13,10 +13,14 @@ struct proc proc[NPROC];
@@ -83,30 +83,8 @@ index 58a8a0b..04ae937 100644
  
  extern char trampoline[]; // trampoline.S
  
-@@ -102,6 +106,18 @@ allocpid()
-   return pid;
- }
- 
-+int
-+allocseed()
-+{
-+  int seed;
-+  
-+  acquire(&seed_lock);
-+  seed = nextseed;
-+  release(&seed_lock);
-+
-+  return seed;
-+}
-+
- // Look in the process table for an UNUSED proc.
- // If found, initialize state required to run in the kernel,
- // and return with p->lock held.
-@@ -123,8 +139,13 @@ allocproc(void)
- 
- found:
+@@ -125,6 +129,10 @@ found:
    p->pid = allocpid();
-+  p->seed = allocseed();
    p->state = USED;
  
 +  // Allocate cmd history
@@ -116,7 +94,7 @@ index 58a8a0b..04ae937 100644
    // Allocate a trapframe page.
    if((p->trapframe = (struct trapframe *)kalloc()) == 0){
      freeproc(p);
-@@ -149,6 +170,20 @@ found:
+@@ -149,6 +157,20 @@ found:
    return p;
  }
  
@@ -137,20 +115,16 @@ index 58a8a0b..04ae937 100644
  // free a proc structure and the data hanging from it,
  // including user pages.
  // p->lock must be held.
-@@ -169,6 +204,12 @@ freeproc(struct proc *p)
+@@ -169,6 +191,8 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
 +  p->traced_syscall_number = 0;
-+  acquire(&seed_lock);
-+  nextseed = p->seed;
-+  release(&seed_lock);
-+  p->seed = 0;
 +  free_command_history(p);
  }
  
  // Create a user page table for a given process, with no user memory,
-@@ -312,6 +353,8 @@ fork(void)
+@@ -312,6 +336,8 @@ fork(void)
  
    pid = np->pid;
  
@@ -159,7 +133,7 @@ index 58a8a0b..04ae937 100644
    release(&np->lock);
  
    acquire(&wait_lock);
-@@ -322,6 +365,9 @@ fork(void)
+@@ -322,6 +348,9 @@ fork(void)
    np->state = RUNNABLE;
    release(&np->lock);
  
@@ -169,7 +143,7 @@ index 58a8a0b..04ae937 100644
    return pid;
  }
  
-@@ -686,3 +732,141 @@ procdump(void)
+@@ -686,3 +715,139 @@ procdump(void)
      printf("\n");
    }
  }
@@ -294,37 +268,34 @@ index 58a8a0b..04ae937 100644
 +
 +int 
 +setSeed(int seed) {
-+  struct proc *p = myproc();
-+  acquire(&p->lock);
-+  p->seed = seed;
-+  release(&p->lock);
++  acquire(&seed_lock);
++  nextseed = seed;
++  release(&seed_lock);
 +  return 0;
 +}
 +
 +int
 +getRandomNumber(){
 +  int seed;
-+  struct proc *p = myproc();
-+  acquire(&p->lock);
-+  p->seed = p->seed + 1;
-+  seed = p->seed;
-+  release(&p->lock);
++  acquire(&seed_lock);
++  nextseed++;
++  seed = nextseed;
++  release(&seed_lock);
 +  return seed;
 +}
 diff --git a/kernel/proc.h b/kernel/proc.h
-index d021857..3857ef6 100644
+index d021857..3034950 100644
 --- a/kernel/proc.h
 +++ b/kernel/proc.h
-@@ -91,6 +91,8 @@ struct proc {
+@@ -91,6 +91,7 @@ struct proc {
    int killed;                  // If non-zero, have been killed
    int xstate;                  // Exit status to be returned to parent's wait
    int pid;                     // Process ID
 +  struct cmd_history history;  // History of commands
-+  int seed;                    // seed for random number
  
    // wait_lock must be held when using this:
    struct proc *parent;         // Parent process
-@@ -104,4 +106,5 @@ struct proc {
+@@ -104,4 +105,5 @@ struct proc {
    struct file *ofile[NOFILE];  // Open files
    struct inode *cwd;           // Current directory
    char name[16];               // Process name (debugging)
