@@ -742,10 +742,10 @@ index 0000000..779740f
 \ No newline at end of file
 diff --git a/user/load.c b/user/load.c
 new file mode 100644
-index 0000000..c6d347a
+index 0000000..8c25fa7
 --- /dev/null
 +++ b/user/load.c
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,145 @@
 +#ifndef CHILD_SLEEP_TIME
 +#define CHILD_SLEEP_TIME 600
 +#endif
@@ -756,18 +756,6 @@ index 0000000..c6d347a
 +#include "kernel/types.h"
 +#include "kernel/fcntl.h"
 +#include "user/user.h"
-+
-+int is_valid_number(const char *str) {
-+    if (str == 0 || *str == '\0') {
-+        return 0;
-+    }
-+    for (int i = 0; str[i] != '\0'; i++) {
-+        if (str[i] < '0' || str[i] > '9') {
-+            return 0;
-+        }
-+    }
-+    return 1;
-+}
 +
 +int* create_children(int child_count, int allocation_amount, int pipe_fd[2]) {
 +    int *child_pids = (int *)malloc(child_count * sizeof(int));
@@ -940,24 +928,12 @@ index 0000000..063e773
 \ No newline at end of file
 diff --git a/user/seed.c b/user/seed.c
 new file mode 100644
-index 0000000..ded8426
+index 0000000..b979543
 --- /dev/null
 +++ b/user/seed.c
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,21 @@
 +#include "kernel/types.h"
 +#include "user/user.h"
-+
-+int is_valid_number(const char *str) {
-+    if (str == 0 || *str == '\0') {
-+        return 0;
-+    }
-+    for (int i = 0; str[i] != '\0'; i++) {
-+        if (str[i] < '0' || str[i] > '9') {
-+            return 0;
-+        }
-+    }
-+    return 1;
-+}
 +
 +int main(int argc, char *argv[]) {
 +    if (argc != 2) {
@@ -1073,10 +1049,10 @@ index 0000000..e63493f
 +    exit(0);
 +}
 diff --git a/user/ulib.c b/user/ulib.c
-index c7b66c4..d85853a 100644
+index c7b66c4..de964d6 100644
 --- a/user/ulib.c
 +++ b/user/ulib.c
-@@ -145,3 +145,9 @@ memcpy(void *dst, const void *src, uint n)
+@@ -145,3 +145,23 @@ memcpy(void *dst, const void *src, uint n)
  {
    return memmove(dst, src, n);
  }
@@ -1086,8 +1062,22 @@ index c7b66c4..d85853a 100644
 +{
 +  return c >= '0' && c <= '9';
 +}
++
++int 
++is_valid_number(const char *str)
++{
++  if (str == 0 || *str == '\0') {
++      return 0;
++  }
++  for (int i = 0; str[i] != '\0'; i++) {
++      if (str[i] < '0' || str[i] > '9') {
++          return 0;
++      }
++  }
++  return 1;
++}
 diff --git a/user/user.h b/user/user.h
-index 04013ca..672335b 100644
+index 04013ca..da00493 100644
 --- a/user/user.h
 +++ b/user/user.h
 @@ -1,4 +1,5 @@
@@ -1111,11 +1101,12 @@ index 04013ca..672335b 100644
  
  // ulib.c
  int stat(const char*, struct stat*);
-@@ -39,3 +48,4 @@ void free(void*);
+@@ -39,3 +48,5 @@ void free(void*);
  int atoi(const char*);
  int memcmp(const void *, const void *, uint);
  void *memcpy(void *, const void *, uint);
 +int is_digit(char);
++int is_valid_number(const char*);
 diff --git a/user/usys.pl b/user/usys.pl
 index 01e426e..fbfb998 100755
 --- a/user/usys.pl
