@@ -74,16 +74,16 @@ index 6624bff..304064f 100644
  #define MAXPATH      128   // maximum file path name
 +#define MAXCMD       100 // maximum length of command
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..2a59c06 100644
+index 58a8a0b..531afd3 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
-@@ -13,10 +13,14 @@ struct proc proc[NPROC];
+@@ -13,10 +13,13 @@ struct proc proc[NPROC];
  struct proc *initproc;
  
  int nextpid = 1;
+-struct spinlock pid_lock;
 +int nextseed = 0;
- struct spinlock pid_lock;
-+struct spinlock seed_lock;
++struct spinlock pid_lock, seed_lock;
  
  extern void forkret(void);
  static void freeproc(struct proc *p);
@@ -92,7 +92,7 @@ index 58a8a0b..2a59c06 100644
  
  extern char trampoline[]; // trampoline.S
  
-@@ -51,6 +55,7 @@ procinit(void)
+@@ -51,6 +54,7 @@ procinit(void)
    
    initlock(&pid_lock, "nextpid");
    initlock(&wait_lock, "wait_lock");
@@ -100,7 +100,7 @@ index 58a8a0b..2a59c06 100644
    for(p = proc; p < &proc[NPROC]; p++) {
        initlock(&p->lock, "proc");
        p->state = UNUSED;
-@@ -125,6 +130,10 @@ found:
+@@ -125,6 +129,10 @@ found:
    p->pid = allocpid();
    p->state = USED;
  
@@ -111,7 +111,7 @@ index 58a8a0b..2a59c06 100644
    // Allocate a trapframe page.
    if((p->trapframe = (struct trapframe *)kalloc()) == 0){
      freeproc(p);
-@@ -149,6 +158,20 @@ found:
+@@ -149,6 +157,20 @@ found:
    return p;
  }
  
@@ -132,7 +132,7 @@ index 58a8a0b..2a59c06 100644
  // free a proc structure and the data hanging from it,
  // including user pages.
  // p->lock must be held.
-@@ -169,6 +192,8 @@ freeproc(struct proc *p)
+@@ -169,6 +191,8 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
@@ -141,7 +141,7 @@ index 58a8a0b..2a59c06 100644
  }
  
  // Create a user page table for a given process, with no user memory,
-@@ -312,6 +337,8 @@ fork(void)
+@@ -312,6 +336,8 @@ fork(void)
  
    pid = np->pid;
  
@@ -150,7 +150,7 @@ index 58a8a0b..2a59c06 100644
    release(&np->lock);
  
    acquire(&wait_lock);
-@@ -322,6 +349,9 @@ fork(void)
+@@ -322,6 +348,9 @@ fork(void)
    np->state = RUNNABLE;
    release(&np->lock);
  
@@ -160,7 +160,7 @@ index 58a8a0b..2a59c06 100644
    return pid;
  }
  
-@@ -686,3 +716,142 @@ procdump(void)
+@@ -686,3 +715,142 @@ procdump(void)
      printf("\n");
    }
  }
