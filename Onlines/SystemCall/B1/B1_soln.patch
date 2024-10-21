@@ -642,10 +642,10 @@ index bc5f356..83a1665 100644
 +#define SYS_setSeed              28
 +#define SYS_getRandomNumber      29
 diff --git a/kernel/sysproc.c b/kernel/sysproc.c
-index 3b4d5bd..915c68c 100644
+index 3b4d5bd..1343d30 100644
 --- a/kernel/sysproc.c
 +++ b/kernel/sysproc.c
-@@ -91,3 +91,65 @@ sys_uptime(void)
+@@ -91,3 +91,67 @@ sys_uptime(void)
    release(&tickslock);
    return xticks;
  }
@@ -701,14 +701,16 @@ index 3b4d5bd..915c68c 100644
 +}
 +
 +uint64
-+sys_setSeed(void){
++sys_setSeed(void)
++{
 +  int seed;
 +  argint(0, &seed);
 +  return setSeed(seed);
 +}
 +
 +uint64
-+sys_getRandomNumber(void){
++sys_getRandomNumber(void)
++{
 +  return getRandomNumber();
 +}
 diff --git a/kernel/types.h b/kernel/types.h
