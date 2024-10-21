@@ -17,7 +17,7 @@ index 62fd0f8..ae27c62 100644
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..7cd64f4 100644
+index d1b6bb9..f96bd7b 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
 @@ -8,6 +8,7 @@ struct spinlock;
@@ -28,6 +28,15 @@ index d1b6bb9..7cd64f4 100644
  
  // bio.c
  void            binit(void);
+@@ -77,7 +78,7 @@ int             piperead(struct pipe*, uint64, int);
+ int             pipewrite(struct pipe*, uint64, int);
+ 
+ // printf.c
+-int            printf(char*, ...) __attribute__ ((format (printf, 1, 2)));
++int             printf(char*, ...) __attribute__ ((format (printf, 1, 2)));
+ void            panic(char*) __attribute__((noreturn));
+ void            printfinit(void);
+ 
 @@ -106,6 +107,14 @@ void            yield(void);
  int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
  int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
@@ -302,7 +311,7 @@ index d021857..3034950 100644
 +  int traced_syscall_number;   // Trace syscall by number
  };
 diff --git a/kernel/syscall.c b/kernel/syscall.c
-index ed65409..25364ae 100644
+index ed65409..6b2db0d 100644
 --- a/kernel/syscall.c
 +++ b/kernel/syscall.c
 @@ -59,6 +59,15 @@ argint(int n, int *ip)
@@ -353,7 +362,7 @@ index ed65409..25364ae 100644
  // Prototypes for the functions that handle system calls.
  extern uint64 sys_fork(void);
  extern uint64 sys_exit(void);
-@@ -101,6 +128,14 @@ extern uint64 sys_unlink(void);
+@@ -101,31 +128,80 @@ extern uint64 sys_unlink(void);
  extern uint64 sys_link(void);
  extern uint64 sys_mkdir(void);
  extern uint64 sys_close(void);
@@ -368,51 +377,90 @@ index ed65409..25364ae 100644
  
  // An array mapping syscall numbers from syscall.h
  // to the function that handles the system call.
-@@ -126,6 +161,47 @@ static uint64 (*syscalls[])(void) = {
- [SYS_link]    sys_link,
- [SYS_mkdir]   sys_mkdir,
- [SYS_close]   sys_close,
-+[SYS_getuid]  sys_getuid,
-+[SYS_setuid]  sys_setuid,
-+[SYS_trace]   sys_trace,
-+[SYS_info]    sys_info,
-+[SYS_addcmdtohistory] sys_addcmdtohistory,
+ static uint64 (*syscalls[])(void) = {
+-[SYS_fork]    sys_fork,
+-[SYS_exit]    sys_exit,
+-[SYS_wait]    sys_wait,
+-[SYS_pipe]    sys_pipe,
+-[SYS_read]    sys_read,
+-[SYS_kill]    sys_kill,
+-[SYS_exec]    sys_exec,
+-[SYS_fstat]   sys_fstat,
+-[SYS_chdir]   sys_chdir,
+-[SYS_dup]     sys_dup,
+-[SYS_getpid]  sys_getpid,
+-[SYS_sbrk]    sys_sbrk,
+-[SYS_sleep]   sys_sleep,
+-[SYS_uptime]  sys_uptime,
+-[SYS_open]    sys_open,
+-[SYS_write]   sys_write,
+-[SYS_mknod]   sys_mknod,
+-[SYS_unlink]  sys_unlink,
+-[SYS_link]    sys_link,
+-[SYS_mkdir]   sys_mkdir,
+-[SYS_close]   sys_close,
++[SYS_fork]                 sys_fork,
++[SYS_exit]                 sys_exit,
++[SYS_wait]                 sys_wait,
++[SYS_pipe]                 sys_pipe,
++[SYS_read]                 sys_read,
++[SYS_kill]                 sys_kill,
++[SYS_exec]                 sys_exec,
++[SYS_fstat]                sys_fstat,
++[SYS_chdir]                sys_chdir,
++[SYS_dup]                  sys_dup,
++[SYS_getpid]               sys_getpid,
++[SYS_sbrk]                 sys_sbrk,
++[SYS_sleep]                sys_sleep,
++[SYS_uptime]               sys_uptime,
++[SYS_open]                 sys_open,
++[SYS_write]                sys_write,
++[SYS_mknod]                sys_mknod,
++[SYS_unlink]               sys_unlink,
++[SYS_link]                 sys_link,
++[SYS_mkdir]                sys_mkdir,
++[SYS_close]                sys_close,
++[SYS_getuid]               sys_getuid,
++[SYS_setuid]               sys_setuid,
++[SYS_trace]                sys_trace,
++[SYS_info]                 sys_info,
++[SYS_addcmdtohistory]      sys_addcmdtohistory,
 +[SYS_getnthcmdfromhistory] sys_getnthcmdfromhistory,
-+[SYS_setSeed] sys_setSeed,
-+[SYS_getRandomNumber] sys_getRandomNumber,
++[SYS_setSeed]              sys_setSeed,
++[SYS_getRandomNumber]      sys_getRandomNumber,
 +};
 +
 +// Array mapping syscall numbers to their names
 +const char *syscall_names[] = {
-+[SYS_fork]   = "fork",
-+[SYS_exit]   = "exit",
-+[SYS_wait]   = "wait",
-+[SYS_pipe]   = "pipe",
-+[SYS_read]   = "read",
-+[SYS_kill]   = "kill",
-+[SYS_exec]   = "exec",
-+[SYS_fstat]  = "fstat",
-+[SYS_chdir]  = "chdir",
-+[SYS_dup]    = "dup",
-+[SYS_getpid] = "getpid",
-+[SYS_sbrk]   = "sbrk",
-+[SYS_sleep]  = "sleep",
-+[SYS_uptime] = "uptime",
-+[SYS_open]   = "open",
-+[SYS_write]  = "write",
-+[SYS_mknod]  = "mknod",
-+[SYS_unlink] = "unlink",
-+[SYS_link]   = "link",
-+[SYS_mkdir]  = "mkdir",
-+[SYS_close]  = "close",
-+[SYS_getuid] = "getuid",
-+[SYS_setuid] = "setuid",
-+[SYS_trace]  = "trace",
-+[SYS_info]   = "info",
-+[SYS_addcmdtohistory] = "addcommandtohistory",
++[SYS_fork]                 = "fork",
++[SYS_exit]                 = "exit",
++[SYS_wait]                 = "wait",
++[SYS_pipe]                 = "pipe",
++[SYS_read]                 = "read",
++[SYS_kill]                 = "kill",
++[SYS_exec]                 = "exec",
++[SYS_fstat]                = "fstat",
++[SYS_chdir]                = "chdir",
++[SYS_dup]                  = "dup",
++[SYS_getpid]               = "getpid",
++[SYS_sbrk]                 = "sbrk",
++[SYS_sleep]                = "sleep",
++[SYS_uptime]               = "uptime",
++[SYS_open]                 = "open",
++[SYS_write]                = "write",
++[SYS_mknod]                = "mknod",
++[SYS_unlink]               = "unlink",
++[SYS_link]                 = "link",
++[SYS_mkdir]                = "mkdir",
++[SYS_close]                = "close",
++[SYS_getuid]               = "getuid",
++[SYS_setuid]               = "setuid",
++[SYS_trace]                = "trace",
++[SYS_info]                 = "info",
++[SYS_addcmdtohistory]      = "addcommandtohistory",
 +[SYS_getnthcmdfromhistory] = "getnthcommandfromhistory",
-+[SYS_setSeed] = "setSeed",
-+[SYS_getRandomNumber] = "getRandomNumber",
++[SYS_setSeed]              = "setSeed",
++[SYS_getRandomNumber]      = "getRandomNumber",
  };
  
  void
@@ -527,21 +575,61 @@ index ed65409..25364ae 100644
 +  }
 +}
 diff --git a/kernel/syscall.h b/kernel/syscall.h
-index bc5f356..6a48d07 100644
+index bc5f356..83a1665 100644
 --- a/kernel/syscall.h
 +++ b/kernel/syscall.h
-@@ -20,3 +20,11 @@
- #define SYS_link   19
- #define SYS_mkdir  20
- #define SYS_close  21
-+#define SYS_getuid 22
-+#define SYS_setuid 23
-+#define SYS_trace  24
-+#define SYS_info   25
-+#define SYS_addcmdtohistory 26
+@@ -1,22 +1,30 @@
+ // System call numbers
+-#define SYS_fork    1
+-#define SYS_exit    2
+-#define SYS_wait    3
+-#define SYS_pipe    4
+-#define SYS_read    5
+-#define SYS_kill    6
+-#define SYS_exec    7
+-#define SYS_fstat   8
+-#define SYS_chdir   9
+-#define SYS_dup    10
+-#define SYS_getpid 11
+-#define SYS_sbrk   12
+-#define SYS_sleep  13
+-#define SYS_uptime 14
+-#define SYS_open   15
+-#define SYS_write  16
+-#define SYS_mknod  17
+-#define SYS_unlink 18
+-#define SYS_link   19
+-#define SYS_mkdir  20
+-#define SYS_close  21
++#define SYS_fork                  1
++#define SYS_exit                  2
++#define SYS_wait                  3
++#define SYS_pipe                  4
++#define SYS_read                  5
++#define SYS_kill                  6
++#define SYS_exec                  7
++#define SYS_fstat                 8
++#define SYS_chdir                 9
++#define SYS_dup                  10
++#define SYS_getpid               11
++#define SYS_sbrk                 12
++#define SYS_sleep                13
++#define SYS_uptime               14
++#define SYS_open                 15
++#define SYS_write                16
++#define SYS_mknod                17
++#define SYS_unlink               18
++#define SYS_link                 19
++#define SYS_mkdir                20
++#define SYS_close                21
++#define SYS_getuid               22
++#define SYS_setuid               23
++#define SYS_trace                24
++#define SYS_info                 25
++#define SYS_addcmdtohistory      26
 +#define SYS_getnthcmdfromhistory 27
-+#define SYS_setSeed 28
-+#define SYS_getRandomNumber 29
++#define SYS_setSeed              28
++#define SYS_getRandomNumber      29
 diff --git a/kernel/sysproc.c b/kernel/sysproc.c
 index 3b4d5bd..915c68c 100644
 --- a/kernel/sysproc.c
@@ -852,13 +940,11 @@ index 0000000..063e773
 \ No newline at end of file
 diff --git a/user/seed.c b/user/seed.c
 new file mode 100644
-index 0000000..d58b0a3
+index 0000000..ded8426
 --- /dev/null
 +++ b/user/seed.c
-@@ -0,0 +1,35 @@
-+#include "kernel/param.h"
+@@ -0,0 +1,33 @@
 +#include "kernel/types.h"
-+#include "kernel/stat.h"
 +#include "user/user.h"
 +
 +int is_valid_number(const char *str) {
