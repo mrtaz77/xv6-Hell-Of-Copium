@@ -70,7 +70,7 @@ index d1b6bb9..d98efc9 100644
  extern uint     ticks;
 diff --git a/kernel/history.h b/kernel/history.h
 new file mode 100644
-index 0000000..673d09d
+index 0000000..8d97c90
 --- /dev/null
 +++ b/kernel/history.h
 @@ -0,0 +1,16 @@
@@ -81,7 +81,7 @@ index 0000000..673d09d
 +#include "spinlock.h"
 +
 +struct syscall_stat {
-+  char syscall_name[16]; 
++  char syscall_name[32]; 
 +  int count;
 +  int accum_time;
 +};
