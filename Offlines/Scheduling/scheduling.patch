@@ -1,8 +1,18 @@
 diff --git a/Makefile b/Makefile
-index 62fd0f8..93177e0 100644
+index 62fd0f8..c3c9e14 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -56,7 +56,7 @@ LD = $(TOOLPREFIX)ld
+@@ -28,7 +28,8 @@ OBJS = \
+   $K/sysfile.o \
+   $K/kernelvec.o \
+   $K/plic.o \
+-  $K/virtio_disk.o
++  $K/virtio_disk.o \
++  $K/mlfq.o \
+ 
+ # riscv64-unknown-elf- or riscv64-linux-gnu-
+ # perhaps in /opt/riscv/bin
+@@ -56,7 +57,7 @@ LD = $(TOOLPREFIX)ld
  OBJCOPY = $(TOOLPREFIX)objcopy
  OBJDUMP = $(TOOLPREFIX)objdump
  
@@ -11,7 +21,7 @@ index 62fd0f8..93177e0 100644
  CFLAGS += -MD
  CFLAGS += -mcmodel=medany
  # CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
-@@ -139,6 +139,10 @@ UPROGS=\
+@@ -139,6 +140,10 @@ UPROGS=\
  	$U/_grind\
  	$U/_wc\
  	$U/_zombie\
@@ -22,7 +32,7 @@ index 62fd0f8..93177e0 100644
  
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
-@@ -160,7 +164,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
+@@ -160,7 +165,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
  	then echo "-gdb tcp::$(GDBPORT)"; \
  	else echo "-s -p $(GDBPORT)"; fi)
  ifndef CPUS
@@ -32,20 +42,21 @@ index 62fd0f8..93177e0 100644
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..072f7ee 100644
+index d1b6bb9..50001cd 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
-@@ -9,6 +9,9 @@ struct sleeplock;
+@@ -8,6 +8,10 @@ struct spinlock;
+ struct sleeplock;
  struct stat;
  struct superblock;
- 
++struct queue;
++
 +// start.c
 +void            timerstop(void);
-+
+ 
  // bio.c
  void            binit(void);
- struct buf*     bread(uint, uint);
-@@ -77,7 +80,7 @@ int             piperead(struct pipe*, uint64, int);
+@@ -77,7 +81,7 @@ int             piperead(struct pipe*, uint64, int);
  int             pipewrite(struct pipe*, uint64, int);
  
  // printf.c
@@ -54,7 +65,7 @@ index d1b6bb9..072f7ee 100644
  void            panic(char*) __attribute__((noreturn));
  void            printfinit(void);
  
-@@ -106,6 +109,8 @@ void            yield(void);
+@@ -106,6 +110,8 @@ void            yield(void);
  int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
  int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
  void            procdump(void);
@@ -63,6 +74,17 @@ index d1b6bb9..072f7ee 100644
  
  // swtch.S
  void            swtch(struct context*, struct context*);
+@@ -185,5 +191,10 @@ void            virtio_disk_init(void);
+ void            virtio_disk_rw(struct buf *, int);
+ void            virtio_disk_intr(void);
+ 
++// mlfq.c
++void            mlfqinit(void);
++void            enqueue(struct queue*, struct proc*);
++struct proc*    dequeue(struct queue*);
++
+ // number of elements in fixed-size array
+ #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
 diff --git a/kernel/kernelvec.S b/kernel/kernelvec.S
 index a18ecbb..23501c4 100644
 --- a/kernel/kernelvec.S
@@ -100,6 +122,92 @@ index a18ecbb..23501c4 100644
 +        sw a2, 0(a1)
 +spin:
 +        j spin
+diff --git a/kernel/main.c b/kernel/main.c
+index f0d3171..ccf8e2c 100644
+--- a/kernel/main.c
++++ b/kernel/main.c
+@@ -40,6 +40,6 @@ main()
+     trapinithart();   // install kernel trap vector
+     plicinithart();   // ask PLIC for device interrupts
+   }
+-
++  mlfqinit();
+   scheduler();        
+ }
+diff --git a/kernel/mlfq.c b/kernel/mlfq.c
+new file mode 100644
+index 0000000..4e53adb
+--- /dev/null
++++ b/kernel/mlfq.c
+@@ -0,0 +1,42 @@
++//
++// Support functions for mlfq.
++//
++
++#include "types.h"
++#include "riscv.h"
++#include "defs.h"
++#include "param.h"
++#include "spinlock.h"
++#include "proc.h"
++#include "mlfq.h"
++
++struct mlfq mlfq;
++
++void 
++mlfqinit(void)
++{
++  initlock(&mlfq.lock, "mlfq");
++  mlfq.top_q.head = mlfq.top_q.tail = mlfq.bottom_q.head = mlfq.bottom_q.tail = 0;
++}
++
++void 
++enqueue(struct queue *q, struct proc *p) 
++{
++  if ((q->tail + 1) % NPROC == q->head) {
++  panic("Queue overflow");  // Check for queue overflow
++  }
++  q->procs[q->tail] = p;
++  q->tail = (q->tail + 1) % NPROC;
++}
++
++struct 
++proc* dequeue(struct queue *q) 
++{
++  if (q->head == q->tail) {
++    return 0;  // Queue is empty
++  }
++  struct proc *p = q->procs[q->head];
++  q->head = (q->head + 1) % NPROC;
++  return p;
++}
++
+diff --git a/kernel/mlfq.h b/kernel/mlfq.h
+new file mode 100644
+index 0000000..a8970a1
+--- /dev/null
++++ b/kernel/mlfq.h
+@@ -0,0 +1,20 @@
++#ifndef MLFQ_H
++#define MLFQ_H
++
++#include "types.h"
++#include "proc.h"
++#include "param.h"
++#include "spinlock.h"
++
++struct queue {
++  struct proc *procs[NPROC];  // Array of process pointers
++  int head;                   // Index of the first process in the queue
++  int tail;                   // Index of the next free slot
++};
++
++struct mlfq {
++  struct queue top_q, bottom_q; // Two queues for MLFQ
++  struct spinlock lock;         // Lock to protect access to the MLFQ
++};
++
++#endif // _MLFQ_H_
 diff --git a/kernel/param.h b/kernel/param.h
 index 6624bff..23fd8ce 100644
 --- a/kernel/param.h
@@ -136,18 +244,29 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..6d8c8a3 100644
+index 58a8a0b..44d0dc0 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
-@@ -5,6 +5,7 @@
+@@ -5,6 +5,8 @@
  #include "spinlock.h"
  #include "proc.h"
  #include "defs.h"
 +#include "random.h"
++#include "mlfq.h"
  
  struct cpu cpus[NCPU];
  
-@@ -51,6 +52,7 @@ procinit(void)
+@@ -26,6 +28,9 @@ extern char trampoline[]; // trampoline.S
+ // must be acquired before any p->lock.
+ struct spinlock wait_lock;
+ 
++// multilevel feedback queue for scheduling
++extern struct mlfq mlfq;
++
+ // Allocate a page for each process's kernel stack.
+ // Map it high in memory, followed by an invalid
+ // guard page.
+@@ -51,6 +56,7 @@ procinit(void)
    
    initlock(&pid_lock, "nextpid");
    initlock(&wait_lock, "wait_lock");
@@ -155,7 +274,7 @@ index 58a8a0b..6d8c8a3 100644
    for(p = proc; p < &proc[NPROC]; p++) {
        initlock(&p->lock, "proc");
        p->state = UNUSED;
-@@ -686,3 +688,22 @@ procdump(void)
+@@ -686,3 +692,22 @@ procdump(void)
      printf("\n");
    }
  }
@@ -178,6 +297,23 @@ index 58a8a0b..6d8c8a3 100644
 +  release(&seed_lock);
 +  return random;
 +}
+diff --git a/kernel/proc.h b/kernel/proc.h
+index d021857..17774a6 100644
+--- a/kernel/proc.h
++++ b/kernel/proc.h
+@@ -1,3 +1,6 @@
++#ifndef PROC_H
++#define PROC_H
++
+ // Saved registers for kernel context switches.
+ struct context {
+   uint64 ra;
+@@ -105,3 +108,5 @@ struct proc {
+   struct inode *cwd;           // Current directory
+   char name[16];               // Process name (debugging)
+ };
++
++#endif // _PROC_H_
 diff --git a/kernel/pstat.h b/kernel/pstat.h
 new file mode 100644
 index 0000000..d9ea295
