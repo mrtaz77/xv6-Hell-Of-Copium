@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 62fd0f8..7bfac8f 100644
+index 62fd0f8..5117aeb 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -56,7 +56,7 @@ LD = $(TOOLPREFIX)ld
@@ -11,7 +11,15 @@ index 62fd0f8..7bfac8f 100644
  CFLAGS += -MD
  CFLAGS += -mcmodel=medany
  # CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
-@@ -160,7 +160,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
+@@ -139,6 +139,7 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
++	$U/_clear\
+ 
+ fs.img: mkfs/mkfs README $(UPROGS)
+ 	mkfs/mkfs fs.img README $(UPROGS)
+@@ -160,7 +161,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
  	then echo "-gdb tcp::$(GDBPORT)"; \
  	else echo "-s -p $(GDBPORT)"; fi)
  ifndef CPUS
@@ -20,3 +28,19 @@ index 62fd0f8..7bfac8f 100644
  endif
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
+diff --git a/user/clear.c b/user/clear.c
+new file mode 100644
+index 0000000..a2fd62a
+--- /dev/null
++++ b/user/clear.c
+@@ -0,0 +1,9 @@
++#include "kernel/types.h"
++#include "user/user.h"
++
++int 
++main() 
++{
++  printf("\033[2J\033[H");
++  exit(0);
++}
+\ No newline at end of file
