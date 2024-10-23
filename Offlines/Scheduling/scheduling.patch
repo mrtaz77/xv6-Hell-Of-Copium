@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 62fd0f8..8a71648 100644
+index 62fd0f8..93177e0 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -56,7 +56,7 @@ LD = $(TOOLPREFIX)ld
@@ -11,16 +11,18 @@ index 62fd0f8..8a71648 100644
  CFLAGS += -MD
  CFLAGS += -mcmodel=medany
  # CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
-@@ -139,6 +139,8 @@ UPROGS=\
+@@ -139,6 +139,10 @@ UPROGS=\
  	$U/_grind\
  	$U/_wc\
  	$U/_zombie\
 +	$U/_clear\
 +	$U/_quit\
++	$U/_seed\
++	$U/_next\
  
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
-@@ -160,7 +162,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
+@@ -160,7 +164,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
  	then echo "-gdb tcp::$(GDBPORT)"; \
  	else echo "-s -p $(GDBPORT)"; fi)
  ifndef CPUS
@@ -30,7 +32,7 @@ index 62fd0f8..8a71648 100644
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..7e4677d 100644
+index d1b6bb9..072f7ee 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
 @@ -9,6 +9,9 @@ struct sleeplock;
@@ -52,6 +54,15 @@ index d1b6bb9..7e4677d 100644
  void            panic(char*) __attribute__((noreturn));
  void            printfinit(void);
  
+@@ -106,6 +109,8 @@ void            yield(void);
+ int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
+ int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
+ void            procdump(void);
++void            setseed(int);
++int             randrange(int);
+ 
+ // swtch.S
+ void            swtch(struct context*, struct context*);
 diff --git a/kernel/kernelvec.S b/kernel/kernelvec.S
 index a18ecbb..23501c4 100644
 --- a/kernel/kernelvec.S
@@ -90,7 +101,7 @@ index a18ecbb..23501c4 100644
 +spin:
 +        j spin
 diff --git a/kernel/param.h b/kernel/param.h
-index 6624bff..15663ea 100644
+index 6624bff..23fd8ce 100644
 --- a/kernel/param.h
 +++ b/kernel/param.h
 @@ -1,13 +1,17 @@
@@ -110,20 +121,63 @@ index 6624bff..15663ea 100644
 +#define NPROC           64 // maximum number of processes
 +#define NCPU             8 // maximum number of CPUs
 +#define NOFILE          16 // open files per process
-+#define NFILE         1 00 // open files per system
++#define NFILE          100 // open files per system
 +#define NINODE          50 // maximum number of active i-nodes
 +#define NDEV            10 // maximum major device number
 +#define ROOTDEV          1 // device number of file system root disk
 +#define MAXARG          32 // max exec arguments
 +#define MAXOPBLOCKS     10 // max # of blocks any FS op writes
-+#define LOGSIZE   (MAXO PBLOCKS*3) // max data blocks in on-disk log
-+#define NBUF      (MAXO PBLOCKS*3) // size of disk block cache
++#define LOGSIZE   (MAXOPBLOCKS*3) // max data blocks in on-disk log
++#define NBUF      (MAXOPBLOCKS*3) // size of disk block cache
 +#define FSSIZE        2000 // size of file system in blocks
 +#define MAXPATH        128 // maximum file path name
 +#define TIME_LIMIT_0     2 // time limits for q0
 +#define TIME_LIMIT_1     4 // time limits for q1
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
+diff --git a/kernel/proc.c b/kernel/proc.c
+index 58a8a0b..6d8c8a3 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -5,6 +5,7 @@
+ #include "spinlock.h"
+ #include "proc.h"
+ #include "defs.h"
++#include "random.h"
+ 
+ struct cpu cpus[NCPU];
+ 
+@@ -51,6 +52,7 @@ procinit(void)
+   
+   initlock(&pid_lock, "nextpid");
+   initlock(&wait_lock, "wait_lock");
++  initlock(&seed_lock, "seed_lock");
+   for(p = proc; p < &proc[NPROC]; p++) {
+       initlock(&p->lock, "proc");
+       p->state = UNUSED;
+@@ -686,3 +688,22 @@ procdump(void)
+     printf("\n");
+   }
+ }
++
++void
++setseed(int userseed)
++{
++  acquire(&seed_lock);
++  seed = userseed;
++  release(&seed_lock);
++}
++
++int
++randrange(int upper_limit)
++{
++  int random;
++  acquire(&seed_lock);
++  seed = (A * seed + C) % M;
++  random = seed % upper_limit + 1;
++  release(&seed_lock);
++  return random;
++}
 diff --git a/kernel/pstat.h b/kernel/pstat.h
 new file mode 100644
 index 0000000..d9ea295
@@ -147,6 +201,42 @@ index 0000000..d9ea295
 +};
 +
 +#endif // _PSTAT_H_
+diff --git a/kernel/random.h b/kernel/random.h
+new file mode 100644
+index 0000000..32829ba
+--- /dev/null
++++ b/kernel/random.h
+@@ -0,0 +1,13 @@
++#ifndef RANDOM_H
++#define RANDOM_H
++
++#define A 14359
++#define C 9654
++#define M 21569
++
++#include "spinlock.h"
++
++int seed = 1337;
++struct spinlock seed_lock;
++
++#endif // _RANDOM_H_
+diff --git a/kernel/spinlock.h b/kernel/spinlock.h
+index 4392820..b56eaf6 100644
+--- a/kernel/spinlock.h
++++ b/kernel/spinlock.h
+@@ -1,3 +1,6 @@
++#ifndef SPINLOCK_H
++#define SPINLOCK_H
++
+ // Mutual exclusion lock.
+ struct spinlock {
+   uint locked;       // Is the lock held?
+@@ -7,3 +10,5 @@ struct spinlock {
+   struct cpu *cpu;   // The cpu holding the lock.
+ };
+ 
++#endif // _SPINLOCK_H_
++
 diff --git a/kernel/start.c b/kernel/start.c
 index e16f18a..fc8d468 100644
 --- a/kernel/start.c
@@ -185,39 +275,124 @@ index e16f18a..fc8d468 100644
 +  timer_scratch[0][5] = 1;
 +}
 diff --git a/kernel/syscall.c b/kernel/syscall.c
-index ed65409..ef36c57 100644
+index ed65409..0c8dcad 100644
 --- a/kernel/syscall.c
 +++ b/kernel/syscall.c
-@@ -101,6 +101,7 @@ extern uint64 sys_unlink(void);
+@@ -101,31 +101,37 @@ extern uint64 sys_unlink(void);
  extern uint64 sys_link(void);
  extern uint64 sys_mkdir(void);
  extern uint64 sys_close(void);
 +extern uint64 sys_quit(void);
++extern uint64 sys_setseed(void);
++extern uint64 sys_randrange(void);
  
  // An array mapping syscall numbers from syscall.h
  // to the function that handles the system call.
-@@ -126,6 +127,7 @@ static uint64 (*syscalls[])(void) = {
- [SYS_link]    sys_link,
- [SYS_mkdir]   sys_mkdir,
- [SYS_close]   sys_close,
-+[SYS_quit]    sys_quit,
+ static uint64 (*syscalls[])(void) = {
+-[SYS_fork]    sys_fork,
+-[SYS_exit]    sys_exit,
+-[SYS_wait]    sys_wait,
+-[SYS_pipe]    sys_pipe,
+-[SYS_read]    sys_read,
+-[SYS_kill]    sys_kill,
+-[SYS_exec]    sys_exec,
+-[SYS_fstat]   sys_fstat,
+-[SYS_chdir]   sys_chdir,
+-[SYS_dup]     sys_dup,
+-[SYS_getpid]  sys_getpid,
+-[SYS_sbrk]    sys_sbrk,
+-[SYS_sleep]   sys_sleep,
+-[SYS_uptime]  sys_uptime,
+-[SYS_open]    sys_open,
+-[SYS_write]   sys_write,
+-[SYS_mknod]   sys_mknod,
+-[SYS_unlink]  sys_unlink,
+-[SYS_link]    sys_link,
+-[SYS_mkdir]   sys_mkdir,
+-[SYS_close]   sys_close,
++[SYS_fork]      sys_fork,
++[SYS_exit]      sys_exit,
++[SYS_wait]      sys_wait,
++[SYS_pipe]      sys_pipe,
++[SYS_read]      sys_read,
++[SYS_kill]      sys_kill,
++[SYS_exec]      sys_exec,
++[SYS_fstat]     sys_fstat,
++[SYS_chdir]     sys_chdir,
++[SYS_dup]       sys_dup,
++[SYS_getpid]    sys_getpid,
++[SYS_sbrk]      sys_sbrk,
++[SYS_sleep]     sys_sleep,
++[SYS_uptime]    sys_uptime,
++[SYS_open]      sys_open,
++[SYS_write]     sys_write,
++[SYS_mknod]     sys_mknod,
++[SYS_unlink]    sys_unlink,
++[SYS_link]      sys_link,
++[SYS_mkdir]     sys_mkdir,
++[SYS_close]     sys_close,
++[SYS_quit]      sys_quit,
++[SYS_setseed]   sys_setseed,
++[SYS_randrange] sys_randrange,
  };
  
  void
 diff --git a/kernel/syscall.h b/kernel/syscall.h
-index bc5f356..3a6d9b0 100644
+index bc5f356..a8cc5b5 100644
 --- a/kernel/syscall.h
 +++ b/kernel/syscall.h
-@@ -20,3 +20,4 @@
- #define SYS_link   19
- #define SYS_mkdir  20
- #define SYS_close  21
-+#define SYS_quit   22
+@@ -1,22 +1,25 @@
+ // System call numbers
+-#define SYS_fork    1
+-#define SYS_exit    2
+-#define SYS_wait    3
+-#define SYS_pipe    4
+-#define SYS_read    5
+-#define SYS_kill    6
+-#define SYS_exec    7
+-#define SYS_fstat   8
+-#define SYS_chdir   9
+-#define SYS_dup    10
+-#define SYS_getpid 11
+-#define SYS_sbrk   12
+-#define SYS_sleep  13
+-#define SYS_uptime 14
+-#define SYS_open   15
+-#define SYS_write  16
+-#define SYS_mknod  17
+-#define SYS_unlink 18
+-#define SYS_link   19
+-#define SYS_mkdir  20
+-#define SYS_close  21
++#define SYS_fork       1
++#define SYS_exit       2
++#define SYS_wait       3
++#define SYS_pipe       4
++#define SYS_read       5
++#define SYS_kill       6
++#define SYS_exec       7
++#define SYS_fstat      8
++#define SYS_chdir      9
++#define SYS_dup       10
++#define SYS_getpid    11
++#define SYS_sbrk      12
++#define SYS_sleep     13
++#define SYS_uptime    14
++#define SYS_open      15
++#define SYS_write     16
++#define SYS_mknod     17
++#define SYS_unlink    18
++#define SYS_link      19
++#define SYS_mkdir     20
++#define SYS_close     21
++#define SYS_quit      22
++#define SYS_setseed   23
++#define SYS_randrange 24
 diff --git a/kernel/sysproc.c b/kernel/sysproc.c
-index 3b4d5bd..3185308 100644
+index 3b4d5bd..90607f0 100644
 --- a/kernel/sysproc.c
 +++ b/kernel/sysproc.c
-@@ -91,3 +91,10 @@ sys_uptime(void)
+@@ -91,3 +91,27 @@ sys_uptime(void)
    release(&tickslock);
    return xticks;
  }
@@ -227,6 +402,23 @@ index 3b4d5bd..3185308 100644
 +{
 +  timerstop();
 +  return 0;
++}
++
++uint64
++sys_setseed(void)
++{
++  int user_seed;
++  argint(0, &user_seed);
++  setseed(user_seed);
++  return 0;
++}
++
++uint64
++sys_randrange(void)
++{
++  int upper_limit;
++  argint(0, &upper_limit);
++  return randrange(upper_limit);
 +}
 diff --git a/user/clear.c b/user/clear.c
 new file mode 100644
@@ -241,6 +433,32 @@ index 0000000..a2fd62a
 +main() 
 +{
 +  printf("\033[2J\033[H");
++  exit(0);
++}
+\ No newline at end of file
+diff --git a/user/next.c b/user/next.c
+new file mode 100644
+index 0000000..9ac0b8b
+--- /dev/null
++++ b/user/next.c
+@@ -0,0 +1,19 @@
++#include "kernel/types.h"
++#include "user/user.h"
++
++int 
++main(int argc, char *argv[])
++{
++  if (argc != 2) {
++    fprintf(2, "Usage: next <upper limit>\n");
++    exit(1);
++  }
++  if (!is_valid_number(argv[1])) {
++    fprintf(2, "Error: Invalid upper limit '%s'.\n", argv[1]);
++    exit(1);
++  }
++  int upper_limit = atoi(argv[1]);
++  int random = randrange(upper_limit);
++  printf("Next random number is %d\n", random);
 +  exit(0);
 +}
 \ No newline at end of file
@@ -267,24 +485,81 @@ index 0000000..b6001db
 +  exit(0);
 +}
 \ No newline at end of file
+diff --git a/user/seed.c b/user/seed.c
+new file mode 100644
+index 0000000..73e2343
+--- /dev/null
++++ b/user/seed.c
+@@ -0,0 +1,19 @@
++#include "kernel/types.h"
++#include "user/user.h"
++
++int 
++main(int argc, char *argv[]) 
++{
++  if (argc != 2) {
++    fprintf(2, "Usage: seed <n>\n");
++    exit(1);
++  }
++  if (!is_valid_number(argv[1])) {
++    fprintf(2, "Error: Invalid seed '%s'.\n", argv[1]);
++    exit(1);
++  }
++  int seed = atoi(argv[1]);
++  setseed(seed);
++  printf("The seed has been set to %d.\n", seed);
++  exit(0);
++}
+\ No newline at end of file
+diff --git a/user/ulib.c b/user/ulib.c
+index c7b66c4..1740893 100644
+--- a/user/ulib.c
++++ b/user/ulib.c
+@@ -145,3 +145,17 @@ memcpy(void *dst, const void *src, uint n)
+ {
+   return memmove(dst, src, n);
+ }
++
++int 
++is_valid_number(const char *str)
++{
++  if (str == 0 || *str == '\0') {
++    return 0;
++  }
++  for (int i = 0; str[i] != '\0'; i++) {
++    if (str[i] < '0' || str[i] > '9') {
++        return 0;
++    }
++  }
++  return 1;
++}
 diff --git a/user/user.h b/user/user.h
-index 04013ca..1a9e07b 100644
+index 04013ca..bfb44b8 100644
 --- a/user/user.h
 +++ b/user/user.h
-@@ -22,6 +22,7 @@ int getpid(void);
+@@ -22,6 +22,9 @@ int getpid(void);
  char* sbrk(int);
  int sleep(int);
  int uptime(void);
 +void quit(void);
++void setseed(int);
++int randrange(int);
  
  // ulib.c
  int stat(const char*, struct stat*);
+@@ -39,3 +42,4 @@ void free(void*);
+ int atoi(const char*);
+ int memcmp(const void *, const void *, uint);
+ void *memcpy(void *, const void *, uint);
++int is_valid_number(const char*);
 diff --git a/user/usys.pl b/user/usys.pl
-index 01e426e..26a4087 100755
+index 01e426e..2de6a28 100755
 --- a/user/usys.pl
 +++ b/user/usys.pl
-@@ -36,3 +36,4 @@ entry("getpid");
+@@ -36,3 +36,6 @@ entry("getpid");
  entry("sbrk");
  entry("sleep");
  entry("uptime");
 +entry("quit");
++entry("setseed");
++entry("randrange");
