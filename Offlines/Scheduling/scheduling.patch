@@ -30,7 +30,7 @@ index 62fd0f8..8a71648 100644
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..840aa40 100644
+index d1b6bb9..7e4677d 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
 @@ -9,6 +9,9 @@ struct sleeplock;
@@ -43,6 +43,15 @@ index d1b6bb9..840aa40 100644
  // bio.c
  void            binit(void);
  struct buf*     bread(uint, uint);
+@@ -77,7 +80,7 @@ int             piperead(struct pipe*, uint64, int);
+ int             pipewrite(struct pipe*, uint64, int);
+ 
+ // printf.c
+-int            printf(char*, ...) __attribute__ ((format (printf, 1, 2)));
++int             printf(char*, ...) __attribute__ ((format (printf, 1, 2)));
+ void            panic(char*) __attribute__((noreturn));
+ void            printfinit(void);
+ 
 diff --git a/kernel/kernelvec.S b/kernel/kernelvec.S
 index a18ecbb..23501c4 100644
 --- a/kernel/kernelvec.S
@@ -80,6 +89,41 @@ index a18ecbb..23501c4 100644
 +        sw a2, 0(a1)
 +spin:
 +        j spin
+diff --git a/kernel/param.h b/kernel/param.h
+index 6624bff..15663ea 100644
+--- a/kernel/param.h
++++ b/kernel/param.h
+@@ -1,13 +1,17 @@
+-#define NPROC        64  // maximum number of processes
+-#define NCPU          8  // maximum number of CPUs
+-#define NOFILE       16  // open files per process
+-#define NFILE       100  // open files per system
+-#define NINODE       50  // maximum number of active i-nodes
+-#define NDEV         10  // maximum major device number
+-#define ROOTDEV       1  // device number of file system root disk
+-#define MAXARG       32  // max exec arguments
+-#define MAXOPBLOCKS  10  // max # of blocks any FS op writes
+-#define LOGSIZE      (MAXOPBLOCKS*3)  // max data blocks in on-disk log
+-#define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
+-#define FSSIZE       2000  // size of file system in blocks
+-#define MAXPATH      128   // maximum file path name
++#define NPROC           64 // maximum number of processes
++#define NCPU             8 // maximum number of CPUs
++#define NOFILE          16 // open files per process
++#define NFILE         1 00 // open files per system
++#define NINODE          50 // maximum number of active i-nodes
++#define NDEV            10 // maximum major device number
++#define ROOTDEV          1 // device number of file system root disk
++#define MAXARG          32 // max exec arguments
++#define MAXOPBLOCKS     10 // max # of blocks any FS op writes
++#define LOGSIZE   (MAXO PBLOCKS*3) // max data blocks in on-disk log
++#define NBUF      (MAXO PBLOCKS*3) // size of disk block cache
++#define FSSIZE        2000 // size of file system in blocks
++#define MAXPATH        128 // maximum file path name
++#define TIME_LIMIT_0     2 // time limits for q0
++#define TIME_LIMIT_1     4 // time limits for q1
++#define WAIT_THRESH      6 // waiting threshold
++#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/pstat.h b/kernel/pstat.h
 new file mode 100644
 index 0000000..30f535a
