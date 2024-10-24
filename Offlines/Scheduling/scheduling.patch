@@ -252,17 +252,19 @@ index 0000000..8b65193
 +}
 diff --git a/kernel/mlfq.h b/kernel/mlfq.h
 new file mode 100644
-index 0000000..a8970a1
+index 0000000..8b6e401
 --- /dev/null
 +++ b/kernel/mlfq.h
-@@ -0,0 +1,20 @@
-+#ifndef MLFQ_H
-+#define MLFQ_H
+@@ -0,0 +1,22 @@
++#ifndef _MLFQ_H_
++#define _MLFQ_H_
 +
 +#include "types.h"
 +#include "proc.h"
 +#include "param.h"
 +#include "spinlock.h"
++
++enum queuelevel { TOP_Q, BOTTOM_Q };
 +
 +struct queue {
 +  struct proc *procs[NPROC];  // Array of process pointers
@@ -312,7 +314,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..f27ff44 100644
+index 58a8a0b..35300ea 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,8 @@
@@ -342,36 +344,39 @@ index 58a8a0b..f27ff44 100644
    for(p = proc; p < &proc[NPROC]; p++) {
        initlock(&p->lock, "proc");
        p->state = UNUSED;
-@@ -146,6 +152,8 @@ found:
+@@ -146,6 +152,9 @@ found:
    p->context.ra = (uint64)forkret;
    p->context.sp = p->kstack + PGSIZE;
  
 +  p->initial_tickets = p->current_tickets = DEFAULT_TICKETS;
++  p->consumed_timer_ticks = 0;
 +
    return p;
  }
  
-@@ -169,6 +177,8 @@ freeproc(struct proc *p)
+@@ -169,6 +178,9 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
 +  p->current_tickets = 0;
 +  p->initial_tickets = 0;
++  p->consumed_timer_ticks = 0;
  }
  
  // Create a user page table for a given process, with no user memory,
-@@ -252,6 +262,10 @@ userinit(void)
+@@ -252,6 +264,11 @@ userinit(void)
    p->state = RUNNABLE;
  
    release(&p->lock);
 +
 +  acquire(&mlfq.lock);
++  p->level = TOP_Q;
 +  enqueue(&mlfq.top_q, p);
 +  release(&mlfq.lock);
  }
  
  // Grow or shrink user memory by n bytes.
-@@ -320,8 +334,13 @@ fork(void)
+@@ -320,8 +337,14 @@ fork(void)
  
    acquire(&np->lock);
    np->state = RUNNABLE;
@@ -379,13 +384,14 @@ index 58a8a0b..f27ff44 100644
    release(&np->lock);
  
 +  acquire(&mlfq.lock);
++  np->level = TOP_Q;
 +  enqueue(&mlfq.top_q, np);
 +  release(&mlfq.lock);
 +
    return pid;
  }
  
-@@ -686,3 +705,22 @@ procdump(void)
+@@ -686,3 +709,22 @@ procdump(void)
      printf("\n");
    }
  }
@@ -409,26 +415,30 @@ index 58a8a0b..f27ff44 100644
 +  return random;
 +}
 diff --git a/kernel/proc.h b/kernel/proc.h
-index d021857..920d645 100644
+index d021857..f07c5f8 100644
 --- a/kernel/proc.h
 +++ b/kernel/proc.h
-@@ -1,3 +1,6 @@
-+#ifndef PROC_H
-+#define PROC_H
+@@ -1,3 +1,8 @@
++#ifndef _PROC_H_
++#define _PROC_H_
++
++#include "mlfq.h"
 +
  // Saved registers for kernel context switches.
  struct context {
    uint64 ra;
-@@ -91,6 +94,8 @@ struct proc {
+@@ -91,6 +96,10 @@ struct proc {
    int killed;                  // If non-zero, have been killed
    int xstate;                  // Exit status to be returned to parent's wait
    int pid;                     // Process ID
 +  int initial_tickets;         // Original number of tickets given by scheduler
 +  int current_tickets;         // Current number of tickets remaining
++  int consumed_timer_ticks;    // Number of tickets consumed
++  enum queuelevel level;         // Current queue level
  
    // wait_lock must be held when using this:
    struct proc *parent;         // Parent process
-@@ -105,3 +110,5 @@ struct proc {
+@@ -105,3 +114,5 @@ struct proc {
    struct inode *cwd;           // Current directory
    char name[16];               // Process name (debugging)
  };
@@ -459,12 +469,12 @@ index 0000000..d9ea295
 +#endif // _PSTAT_H_
 diff --git a/kernel/random.h b/kernel/random.h
 new file mode 100644
-index 0000000..32829ba
+index 0000000..523580d
 --- /dev/null
 +++ b/kernel/random.h
 @@ -0,0 +1,13 @@
-+#ifndef RANDOM_H
-+#define RANDOM_H
++#ifndef _RANDOM_H_
++#define _RANDOM_H_
 +
 +#define A 14359
 +#define C 9654
@@ -477,12 +487,12 @@ index 0000000..32829ba
 +
 +#endif // _RANDOM_H_
 diff --git a/kernel/spinlock.h b/kernel/spinlock.h
-index 4392820..b56eaf6 100644
+index 4392820..c14b802 100644
 --- a/kernel/spinlock.h
 +++ b/kernel/spinlock.h
 @@ -1,3 +1,6 @@
-+#ifndef SPINLOCK_H
-+#define SPINLOCK_H
++#ifndef _SPINLOCK_H_
++#define _SPINLOCK_H_
 +
  // Mutual exclusion lock.
  struct spinlock {
