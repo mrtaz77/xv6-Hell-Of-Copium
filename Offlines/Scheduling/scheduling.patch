@@ -42,7 +42,7 @@ index 62fd0f8..c3c9e14 100644
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..50001cd 100644
+index d1b6bb9..b12d41d 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
 @@ -8,6 +8,10 @@ struct spinlock;
@@ -74,7 +74,7 @@ index d1b6bb9..50001cd 100644
  
  // swtch.S
  void            swtch(struct context*, struct context*);
-@@ -185,5 +191,10 @@ void            virtio_disk_init(void);
+@@ -185,5 +191,13 @@ void            virtio_disk_init(void);
  void            virtio_disk_rw(struct buf *, int);
  void            virtio_disk_intr(void);
  
@@ -82,6 +82,9 @@ index d1b6bb9..50001cd 100644
 +void            mlfqinit(void);
 +void            enqueue(struct queue*, struct proc*);
 +struct proc*    dequeue(struct queue*);
++struct proc*    round_robin(struct queue*);
++struct proc*    lottery(struct queue*);
++void            reinitialize_tickets(struct queue*);
 +
  // number of elements in fixed-size array
  #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
@@ -136,10 +139,10 @@ index f0d3171..ccf8e2c 100644
  }
 diff --git a/kernel/mlfq.c b/kernel/mlfq.c
 new file mode 100644
-index 0000000..4e53adb
+index 0000000..8b65193
 --- /dev/null
 +++ b/kernel/mlfq.c
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,107 @@
 +//
 +// Support functions for mlfq.
 +//
@@ -171,8 +174,8 @@ index 0000000..4e53adb
 +  q->tail = (q->tail + 1) % NPROC;
 +}
 +
-+struct 
-+proc* dequeue(struct queue *q) 
++struct proc* 
++dequeue(struct queue *q) 
 +{
 +  if (q->head == q->tail) {
 +    return 0;  // Queue is empty
@@ -182,6 +185,71 @@ index 0000000..4e53adb
 +  return p;
 +}
 +
++struct proc* 
++round_robin(struct queue *q)
++{
++  for(int i = q->head; i < q->tail; i = (i + 1) % NPROC) {
++    struct proc *p = q->procs[i];
++    acquire(&p->lock);
++    if(p->state == RUNNABLE) {
++      release(&p->lock);
++      return p;
++    }
++    release(&p->lock);
++  }
++  return 0;
++}
++
++struct proc*
++lottery(struct queue *q)
++{
++  int total_tickets = 0;
++
++  for (int i = q->head; i != q->tail; i = (i + 1) % NPROC) {
++    struct proc *p = q->procs[i];
++    acquire(&p->lock);
++    if (p && p->state == RUNNABLE) {
++      total_tickets += p->current_tickets;
++    }
++    release(&p->lock);
++  }
++
++  if(!total_tickets) {
++    reinitialize_tickets(q);
++    return lottery(q);
++  }
++
++  int winning_ticket = randrange(total_tickets);
++  total_tickets = 0;
++
++  // Pick the process based on lottery
++  for (int i = q->head; i != q->tail; i = (i + 1) % NPROC) {
++    struct proc *p = q->procs[i];
++    acquire(&p->lock);
++    if (p && p->state == RUNNABLE) {
++      total_tickets += p->current_tickets;
++      if (total_tickets > winning_ticket) {
++        release(&p->lock);
++        return p;
++      }
++    }
++    release(&p->lock);
++  }
++  return 0;
++}
++
++void 
++reinitialize_tickets(struct queue *q)
++{
++  for (int i = q->head; i != q->tail; i = (i + 1) % NPROC) {
++    struct proc *p = q->procs[i];
++    acquire(&p->lock);
++    if (p && p->state == RUNNABLE) {
++      p->current_tickets = p->initial_tickets;
++    }
++    release(&p->lock);
++  }
++}
 diff --git a/kernel/mlfq.h b/kernel/mlfq.h
 new file mode 100644
 index 0000000..a8970a1
@@ -244,7 +312,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..44d0dc0 100644
+index 58a8a0b..f27ff44 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,8 @@
@@ -274,7 +342,50 @@ index 58a8a0b..44d0dc0 100644
    for(p = proc; p < &proc[NPROC]; p++) {
        initlock(&p->lock, "proc");
        p->state = UNUSED;
-@@ -686,3 +692,22 @@ procdump(void)
+@@ -146,6 +152,8 @@ found:
+   p->context.ra = (uint64)forkret;
+   p->context.sp = p->kstack + PGSIZE;
+ 
++  p->initial_tickets = p->current_tickets = DEFAULT_TICKETS;
++
+   return p;
+ }
+ 
+@@ -169,6 +177,8 @@ freeproc(struct proc *p)
+   p->killed = 0;
+   p->xstate = 0;
+   p->state = UNUSED;
++  p->current_tickets = 0;
++  p->initial_tickets = 0;
+ }
+ 
+ // Create a user page table for a given process, with no user memory,
+@@ -252,6 +262,10 @@ userinit(void)
+   p->state = RUNNABLE;
+ 
+   release(&p->lock);
++
++  acquire(&mlfq.lock);
++  enqueue(&mlfq.top_q, p);
++  release(&mlfq.lock);
+ }
+ 
+ // Grow or shrink user memory by n bytes.
+@@ -320,8 +334,13 @@ fork(void)
+ 
+   acquire(&np->lock);
+   np->state = RUNNABLE;
++  np->initial_tickets = np->current_tickets = p->initial_tickets;
+   release(&np->lock);
+ 
++  acquire(&mlfq.lock);
++  enqueue(&mlfq.top_q, np);
++  release(&mlfq.lock);
++
+   return pid;
+ }
+ 
+@@ -686,3 +705,22 @@ procdump(void)
      printf("\n");
    }
  }
@@ -298,7 +409,7 @@ index 58a8a0b..44d0dc0 100644
 +  return random;
 +}
 diff --git a/kernel/proc.h b/kernel/proc.h
-index d021857..17774a6 100644
+index d021857..920d645 100644
 --- a/kernel/proc.h
 +++ b/kernel/proc.h
 @@ -1,3 +1,6 @@
@@ -308,7 +419,16 @@ index d021857..17774a6 100644
  // Saved registers for kernel context switches.
  struct context {
    uint64 ra;
-@@ -105,3 +108,5 @@ struct proc {
+@@ -91,6 +94,8 @@ struct proc {
+   int killed;                  // If non-zero, have been killed
+   int xstate;                  // Exit status to be returned to parent's wait
+   int pid;                     // Process ID
++  int initial_tickets;         // Original number of tickets given by scheduler
++  int current_tickets;         // Current number of tickets remaining
+ 
+   // wait_lock must be held when using this:
+   struct proc *parent;         // Parent process
+@@ -105,3 +110,5 @@ struct proc {
    struct inode *cwd;           // Current directory
    char name[16];               // Process name (debugging)
  };
