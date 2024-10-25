@@ -42,22 +42,23 @@ index 62fd0f8..c3c9e14 100644
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..79b2d8a 100644
+index d1b6bb9..ec640be 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
-@@ -8,6 +8,11 @@ struct spinlock;
+@@ -8,6 +8,12 @@ struct spinlock;
  struct sleeplock;
  struct stat;
  struct superblock;
 +struct queue;
 +struct mlfq;
++struct pstat;
 +
 +// start.c
 +void            timerstop(void);
  
  // bio.c
  void            binit(void);
-@@ -77,7 +82,7 @@ int             piperead(struct pipe*, uint64, int);
+@@ -77,7 +83,7 @@ int             piperead(struct pipe*, uint64, int);
  int             pipewrite(struct pipe*, uint64, int);
  
  // printf.c
@@ -66,17 +67,18 @@ index d1b6bb9..79b2d8a 100644
  void            panic(char*) __attribute__((noreturn));
  void            printfinit(void);
  
-@@ -106,6 +111,9 @@ void            yield(void);
+@@ -106,6 +112,10 @@ void            yield(void);
  int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
  int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
  void            procdump(void);
 +void            setseed(int);
 +int             randrange(int);
 +int             settickets(int);
++int             getpinfo(struct pstat*);
  
  // swtch.S
  void            swtch(struct context*, struct context*);
-@@ -185,5 +193,15 @@ void            virtio_disk_init(void);
+@@ -185,5 +195,15 @@ void            virtio_disk_init(void);
  void            virtio_disk_rw(struct buf *, int);
  void            virtio_disk_intr(void);
  
@@ -362,19 +364,20 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..5b71a79 100644
+index 58a8a0b..b10787c 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
-@@ -5,6 +5,8 @@
+@@ -5,6 +5,9 @@
  #include "spinlock.h"
  #include "proc.h"
  #include "defs.h"
 +#include "random.h"
 +#include "mlfq.h"
++#include "pstat.h"
  
  struct cpu cpus[NCPU];
  
-@@ -26,6 +28,14 @@ extern char trampoline[]; // trampoline.S
+@@ -26,6 +29,14 @@ extern char trampoline[]; // trampoline.S
  // must be acquired before any p->lock.
  struct spinlock wait_lock;
  
@@ -389,7 +392,7 @@ index 58a8a0b..5b71a79 100644
  // Allocate a page for each process's kernel stack.
  // Map it high in memory, followed by an invalid
  // guard page.
-@@ -51,6 +61,7 @@ procinit(void)
+@@ -51,6 +62,7 @@ procinit(void)
    
    initlock(&pid_lock, "nextpid");
    initlock(&wait_lock, "wait_lock");
@@ -397,27 +400,28 @@ index 58a8a0b..5b71a79 100644
    for(p = proc; p < &proc[NPROC]; p++) {
        initlock(&p->lock, "proc");
        p->state = UNUSED;
-@@ -146,6 +157,9 @@ found:
+@@ -146,6 +158,10 @@ found:
    p->context.ra = (uint64)forkret;
    p->context.sp = p->kstack + PGSIZE;
  
 +  p->initial_tickets = p->current_tickets = DEFAULT_TICKETS;
-+  p->consumed_timer_ticks = 0;
++  p->consumed_timer_ticks = p->times_scheduled = 0;
++  p->queue_ticks[TOP_Q] = p->queue_ticks[BOTTOM_Q] = 0;
 +
    return p;
  }
  
-@@ -169,6 +183,9 @@ freeproc(struct proc *p)
+@@ -169,6 +185,9 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
-+  p->current_tickets = 0;
-+  p->initial_tickets = 0;
-+  p->consumed_timer_ticks = 0;
++  p->current_tickets = p->initial_tickets = 0;
++  p->consumed_timer_ticks = p->times_scheduled = 0;
++  p->queue_ticks[TOP_Q] = p->queue_ticks[BOTTOM_Q] = 0;
  }
  
  // Create a user page table for a given process, with no user memory,
-@@ -252,6 +269,11 @@ userinit(void)
+@@ -252,6 +271,11 @@ userinit(void)
    p->state = RUNNABLE;
  
    release(&p->lock);
@@ -429,7 +433,7 @@ index 58a8a0b..5b71a79 100644
  }
  
  // Grow or shrink user memory by n bytes.
-@@ -320,8 +342,14 @@ fork(void)
+@@ -320,8 +344,14 @@ fork(void)
  
    acquire(&np->lock);
    np->state = RUNNABLE;
@@ -444,7 +448,7 @@ index 58a8a0b..5b71a79 100644
    return pid;
  }
  
-@@ -454,22 +482,29 @@ scheduler(void)
+@@ -454,22 +484,29 @@ scheduler(void)
      // processes are waiting.
      intr_on();
  
@@ -490,7 +494,7 @@ index 58a8a0b..5b71a79 100644
    }
  }
  
-@@ -686,3 +721,92 @@ procdump(void)
+@@ -686,3 +723,121 @@ procdump(void)
      printf("\n");
    }
  }
@@ -548,14 +552,14 @@ index 58a8a0b..5b71a79 100644
 +handle_cpu_proc(struct cpu* c, struct proc* p, int time_limit)
 +{
 +  acquire(&p->lock);
-+  p->consumed_timer_ticks = 0;
-+  while(p->consumed_timer_ticks < time_limit) {
++  int ticks_at_start = p->consumed_timer_ticks;
++  while(p->consumed_timer_ticks - ticks_at_start < time_limit) {
 +    p->state = RUNNING;
 +    c->proc = p;
 +    
 +    swtch(&c->context, &p->context);
-+    
 +    p->consumed_timer_ticks++;
++    p->queue_ticks[p->level]++;
 +
 +    if(p->state == ZOMBIE) {
 +      remove_proc_from_mlfq(&mlfq, p);
@@ -567,24 +571,53 @@ index 58a8a0b..5b71a79 100644
 +      break;
 +    }
 +
-+    if(p->state == RUNNABLE && p->consumed_timer_ticks == time_limit)
++    if(p->state == RUNNABLE && p->consumed_timer_ticks - ticks_at_start == time_limit)
 +      demote(&mlfq, p);
 +  }
-+  c->proc = 0;
++  p->times_scheduled++;
 +  p->current_tickets--;
++  c->proc = 0;
 +  release(&p->lock);
 +}
 +
 +int
 +settickets(int tickets)
 +{
++  if(tickets < 0) return -1;
 +  struct proc *p = myproc();
 +  acquire(&p->lock);
 +  p->initial_tickets = p->current_tickets = tickets;
 +  release(&p->lock);
++  return 0;
++}
++
++int
++getpinfo(struct pstat* user_pstat)
++{
++  struct pstat *kernel_pstat;
++  struct proc* p;
++  int i = 0;
++  for(p = proc; p < &proc[NPROC]; p++) {
++    acquire(&p->lock);
++    kernel_pstat->pid[i] = p->pid;
++    kernel_pstat->inuse[i] = (p->state == RUNNABLE || p->state == RUNNING);
++    kernel_pstat->inQ[i] = p->level;
++    kernel_pstat->waiting_time[i] = 0;
++    kernel_pstat->running_time[i] = 0;
++    kernel_pstat->times_scheduled[i] = p->times_scheduled;
++    kernel_pstat->tickets_original[i] = p->initial_tickets;
++    kernel_pstat->tickets_current[i] = p->current_tickets;
++    kernel_pstat->queue_ticks[i][TOP_Q] = p->queue_ticks[TOP_Q];
++    kernel_pstat->queue_ticks[i][BOTTOM_Q] = p->queue_ticks[BOTTOM_Q];
++    release(&p->lock);
++    i++;
++  }
++  if (copyout(myproc()->pagetable, (uint64)user_pstat, (char *)&kernel_pstat, sizeof(kernel_pstat)) < 0)
++    return -1;
++  return 0;
 +}
 diff --git a/kernel/proc.h b/kernel/proc.h
-index d021857..43df280 100644
+index d021857..2ef2c2a 100644
 --- a/kernel/proc.h
 +++ b/kernel/proc.h
 @@ -1,3 +1,8 @@
@@ -596,7 +629,7 @@ index d021857..43df280 100644
  // Saved registers for kernel context switches.
  struct context {
    uint64 ra;
-@@ -91,6 +96,10 @@ struct proc {
+@@ -91,6 +96,12 @@ struct proc {
    int killed;                  // If non-zero, have been killed
    int xstate;                  // Exit status to be returned to parent's wait
    int pid;                     // Process ID
@@ -604,10 +637,12 @@ index d021857..43df280 100644
 +  int current_tickets;         // Current number of tickets remaining
 +  int consumed_timer_ticks;    // Number of tickets consumed
 +  enum queuelevel level;       // Current queue level
++  int times_scheduled;         // Total number of times the process was scheduled
++  uint queue_ticks[2];         // Total number of ticks the process has spent in each queue
  
    // wait_lock must be held when using this:
    struct proc *parent;         // Parent process
-@@ -105,3 +114,5 @@ struct proc {
+@@ -105,3 +116,5 @@ struct proc {
    struct inode *cwd;           // Current directory
    char name[16];               // Process name (debugging)
  };
@@ -710,10 +745,10 @@ index e16f18a..fc8d468 100644
 +  timer_scratch[0][5] = 1;
 +}
 diff --git a/kernel/syscall.c b/kernel/syscall.c
-index ed65409..0058819 100644
+index ed65409..1d8778d 100644
 --- a/kernel/syscall.c
 +++ b/kernel/syscall.c
-@@ -101,31 +101,39 @@ extern uint64 sys_unlink(void);
+@@ -101,31 +101,41 @@ extern uint64 sys_unlink(void);
  extern uint64 sys_link(void);
  extern uint64 sys_mkdir(void);
  extern uint64 sys_close(void);
@@ -721,6 +756,7 @@ index ed65409..0058819 100644
 +extern uint64 sys_setseed(void);
 +extern uint64 sys_randrange(void);
 +extern uint64 sys_settickets(void);
++extern uint64 sys_getpinfo(void);
  
  // An array mapping syscall numbers from syscall.h
  // to the function that handles the system call.
@@ -771,14 +807,15 @@ index ed65409..0058819 100644
 +[SYS_setseed]    sys_setseed,
 +[SYS_randrange]  sys_randrange,
 +[SYS_settickets] sys_settickets,
++[SYS_getpinfo]   sys_getpinfo,
  };
  
  void
 diff --git a/kernel/syscall.h b/kernel/syscall.h
-index bc5f356..0b0b552 100644
+index bc5f356..f66fb74 100644
 --- a/kernel/syscall.h
 +++ b/kernel/syscall.h
-@@ -1,22 +1,26 @@
+@@ -1,22 +1,27 @@
  // System call numbers
 -#define SYS_fork    1
 -#define SYS_exit    2
@@ -826,11 +863,12 @@ index bc5f356..0b0b552 100644
 +#define SYS_setseed    23
 +#define SYS_randrange  24
 +#define SYS_settickets 25
++#define SYS_getpinfo   26
 diff --git a/kernel/sysproc.c b/kernel/sysproc.c
-index 3b4d5bd..cd53409 100644
+index 3b4d5bd..6e7a4dd 100644
 --- a/kernel/sysproc.c
 +++ b/kernel/sysproc.c
-@@ -91,3 +91,35 @@ sys_uptime(void)
+@@ -91,3 +91,43 @@ sys_uptime(void)
    release(&tickslock);
    return xticks;
  }
@@ -865,6 +903,14 @@ index 3b4d5bd..cd53409 100644
 +  int tickets;
 +  argint(0, &tickets);
 +  return settickets(tickets);
++}
++
++uint64
++sys_getpinfo(void)
++{
++  struct pstat *user_pstat;
++  argaddr(0, &user_pstat);
++  return getpinfo(user_pstat);
 +}
 diff --git a/user/clear.c b/user/clear.c
 new file mode 100644
@@ -980,10 +1026,16 @@ index c7b66c4..1740893 100644
 +  return 1;
 +}
 diff --git a/user/user.h b/user/user.h
-index 04013ca..4d7409a 100644
+index 04013ca..3719361 100644
 --- a/user/user.h
 +++ b/user/user.h
-@@ -22,6 +22,10 @@ int getpid(void);
+@@ -1,4 +1,5 @@
+ struct stat;
++struct pstat;
+ 
+ // system calls
+ int fork(void);
+@@ -22,6 +23,11 @@ int getpid(void);
  char* sbrk(int);
  int sleep(int);
  int uptime(void);
@@ -991,19 +1043,20 @@ index 04013ca..4d7409a 100644
 +void setseed(int);
 +int randrange(int);
 +int settickets(int);
++int getpinfo(struct pstat*);
  
  // ulib.c
  int stat(const char*, struct stat*);
-@@ -39,3 +43,4 @@ void free(void*);
+@@ -39,3 +45,4 @@ void free(void*);
  int atoi(const char*);
  int memcmp(const void *, const void *, uint);
  void *memcpy(void *, const void *, uint);
 +int is_valid_number(const char*);
 diff --git a/user/usys.pl b/user/usys.pl
-index 01e426e..5cb04cd 100755
+index 01e426e..6ff0c17 100755
 --- a/user/usys.pl
 +++ b/user/usys.pl
-@@ -36,3 +36,7 @@ entry("getpid");
+@@ -36,3 +36,8 @@ entry("getpid");
  entry("sbrk");
  entry("sleep");
  entry("uptime");
@@ -1011,3 +1064,4 @@ index 01e426e..5cb04cd 100755
 +entry("setseed");
 +entry("randrange");
 +entry("settickets");
++entry("getpinfo");
