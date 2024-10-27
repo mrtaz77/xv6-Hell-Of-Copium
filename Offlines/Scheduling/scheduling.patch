@@ -45,7 +45,7 @@ index 62fd0f8..0341e01 100644
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..efb956c 100644
+index d1b6bb9..4173e4e 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
 @@ -8,6 +8,10 @@ struct spinlock;
@@ -77,7 +77,7 @@ index d1b6bb9..efb956c 100644
 +int             settickets(int);
 +int             getpinfo(struct pstat*);
 +int             togglelog(void);
-+void            update_q_ticks_in_proc_table(int);
++void            increment_q_ticks_in_proc_table();
  
  // swtch.S
  void            swtch(struct context*, struct context*);
@@ -195,7 +195,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..62dc8ed 100644
+index 58a8a0b..2907bd3 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,9 @@
@@ -317,7 +317,7 @@ index 58a8a0b..62dc8ed 100644
 +            c->proc = p;
 +            swtch(&c->context, &p->context);
 +            p->consumed_timer_ticks++;
-+            update_q_ticks_in_proc_table(p->consumed_timer_ticks - initial_ticks);
++            increment_q_ticks_in_proc_table();
 +            if(LOG) {
 +              printf("\t%sProcess %d has spent %d ticks in queue %d%s\n",
 +              HYEL, p->pid, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
@@ -374,7 +374,7 @@ index 58a8a0b..62dc8ed 100644
 +            c->proc = p;
 +            swtch(&c->context, &p->context);
 +            p->consumed_timer_ticks++;
-+            update_q_ticks_in_proc_table(p->consumed_timer_ticks - initial_ticks);
++            increment_q_ticks_in_proc_table();
 +            if(LOG) {
 +              printf("\t%sProcess %d has spent %d ticks in queue %d%s\n",
 +              HYEL, p->pid, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
@@ -490,12 +490,12 @@ index 58a8a0b..62dc8ed 100644
 +}
 +
 +void
-+update_q_ticks_in_proc_table(int increment_ticks)
++increment_q_ticks_in_proc_table()
 +{
 +  struct proc* p;
 +  for(p = proc; p < &proc[NPROC]; p++) {
 +    if(p->pid == 0) continue;
-+    p->queue_ticks[p->level] += increment_ticks;
++    p->queue_ticks[p->level]++;
 +  }
 +}
 diff --git a/kernel/proc.h b/kernel/proc.h
