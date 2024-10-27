@@ -45,7 +45,7 @@ index 62fd0f8..0341e01 100644
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..13eda18 100644
+index d1b6bb9..efb956c 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
 @@ -8,6 +8,10 @@ struct spinlock;
@@ -68,7 +68,7 @@ index d1b6bb9..13eda18 100644
  void            panic(char*) __attribute__((noreturn));
  void            printfinit(void);
  
-@@ -106,6 +110,11 @@ void            yield(void);
+@@ -106,6 +110,12 @@ void            yield(void);
  int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
  int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
  void            procdump(void);
@@ -77,10 +77,11 @@ index d1b6bb9..13eda18 100644
 +int             settickets(int);
 +int             getpinfo(struct pstat*);
 +int             togglelog(void);
++void            update_q_ticks_in_proc_table(int);
  
  // swtch.S
  void            swtch(struct context*, struct context*);
-@@ -185,5 +194,8 @@ void            virtio_disk_init(void);
+@@ -185,5 +195,8 @@ void            virtio_disk_init(void);
  void            virtio_disk_rw(struct buf *, int);
  void            virtio_disk_intr(void);
  
@@ -194,7 +195,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..848fc5b 100644
+index 58a8a0b..62dc8ed 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,9 @@
@@ -316,7 +317,7 @@ index 58a8a0b..848fc5b 100644
 +            c->proc = p;
 +            swtch(&c->context, &p->context);
 +            p->consumed_timer_ticks++;
-+            p->queue_ticks[TOP_Q]++;
++            update_q_ticks_in_proc_table(p->consumed_timer_ticks - initial_ticks);
 +            if(LOG) {
 +              printf("\t%sProcess %d has spent %d ticks in queue %d%s\n",
 +              HYEL, p->pid, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
@@ -373,7 +374,7 @@ index 58a8a0b..848fc5b 100644
 +            c->proc = p;
 +            swtch(&c->context, &p->context);
 +            p->consumed_timer_ticks++;
-+            p->queue_ticks[BOTTOM_Q]++;
++            update_q_ticks_in_proc_table(p->consumed_timer_ticks - initial_ticks);
 +            if(LOG) {
 +              printf("\t%sProcess %d has spent %d ticks in queue %d%s\n",
 +              HYEL, p->pid, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
@@ -418,7 +419,7 @@ index 58a8a0b..848fc5b 100644
  }
  
  // Wake up all processes sleeping on chan.
-@@ -686,3 +804,68 @@ procdump(void)
+@@ -686,3 +804,78 @@ procdump(void)
      printf("\n");
    }
  }
@@ -486,6 +487,16 @@ index 58a8a0b..848fc5b 100644
 +  LOG ^= 1;
 +  release(&log_lock);
 +  return LOG;
++}
++
++void
++update_q_ticks_in_proc_table(int increment_ticks)
++{
++  struct proc* p;
++  for(p = proc; p < &proc[NPROC]; p++) {
++    if(p->pid == 0) continue;
++    p->queue_ticks[p->level] += increment_ticks;
++  }
 +}
 diff --git a/kernel/proc.h b/kernel/proc.h
 index d021857..2ef2c2a 100644
