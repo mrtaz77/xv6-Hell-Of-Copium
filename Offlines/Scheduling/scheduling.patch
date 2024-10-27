@@ -194,7 +194,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..96fe259 100644
+index 58a8a0b..848fc5b 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,9 @@
@@ -257,15 +257,16 @@ index 58a8a0b..96fe259 100644
  
    release(&p->lock);
  }
-@@ -320,6 +338,7 @@ fork(void)
+@@ -312,6 +330,8 @@ fork(void)
  
-   acquire(&np->lock);
-   np->state = RUNNABLE;
+   pid = np->pid;
+ 
 +  np->initial_tickets = np->current_tickets = p->initial_tickets;
++
    release(&np->lock);
  
-   return pid;
-@@ -448,28 +467,124 @@ scheduler(void)
+   acquire(&wait_lock);
+@@ -448,28 +468,124 @@ scheduler(void)
    struct cpu *c = mycpu();
  
    c->proc = 0;
@@ -401,7 +402,7 @@ index 58a8a0b..96fe259 100644
    }
  }
  
-@@ -509,6 +624,7 @@ yield(void)
+@@ -509,6 +625,7 @@ yield(void)
    p->state = RUNNABLE;
    sched();
    release(&p->lock);
@@ -409,7 +410,7 @@ index 58a8a0b..96fe259 100644
  }
  
  // A fork child's very first scheduling by scheduler()
-@@ -564,6 +680,7 @@ sleep(void *chan, struct spinlock *lk)
+@@ -564,6 +681,7 @@ sleep(void *chan, struct spinlock *lk)
    // Reacquire original lock.
    release(&p->lock);
    acquire(lk);
@@ -417,7 +418,7 @@ index 58a8a0b..96fe259 100644
  }
  
  // Wake up all processes sleeping on chan.
-@@ -686,3 +803,68 @@ procdump(void)
+@@ -686,3 +804,68 @@ procdump(void)
      printf("\n");
    }
  }
