@@ -1,18 +1,17 @@
 diff --git a/Makefile b/Makefile
-index 62fd0f8..b7ea48d 100644
+index 62fd0f8..284d017 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -28,7 +28,8 @@ OBJS = \
+@@ -28,7 +28,7 @@ OBJS = \
    $K/sysfile.o \
    $K/kernelvec.o \
    $K/plic.o \
 -  $K/virtio_disk.o
 +  $K/virtio_disk.o \
-+  $K/mlfq.o \
  
  # riscv64-unknown-elf- or riscv64-linux-gnu-
  # perhaps in /opt/riscv/bin
-@@ -56,7 +57,7 @@ LD = $(TOOLPREFIX)ld
+@@ -56,7 +56,7 @@ LD = $(TOOLPREFIX)ld
  OBJCOPY = $(TOOLPREFIX)objcopy
  OBJDUMP = $(TOOLPREFIX)objdump
  
@@ -21,7 +20,7 @@ index 62fd0f8..b7ea48d 100644
  CFLAGS += -MD
  CFLAGS += -mcmodel=medany
  # CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
-@@ -139,6 +140,13 @@ UPROGS=\
+@@ -139,6 +139,13 @@ UPROGS=\
  	$U/_grind\
  	$U/_wc\
  	$U/_zombie\
@@ -35,7 +34,7 @@ index 62fd0f8..b7ea48d 100644
  
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
-@@ -160,7 +168,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
+@@ -160,7 +167,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
  	then echo "-gdb tcp::$(GDBPORT)"; \
  	else echo "-s -p $(GDBPORT)"; fi)
  ifndef CPUS
@@ -45,7 +44,7 @@ index 62fd0f8..b7ea48d 100644
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..ec4ed73 100644
+index d1b6bb9..fc35822 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
 @@ -8,6 +8,12 @@ struct spinlock;
@@ -82,22 +81,6 @@ index d1b6bb9..ec4ed73 100644
  
  // swtch.S
  void            swtch(struct context*, struct context*);
-@@ -185,5 +196,15 @@ void            virtio_disk_init(void);
- void            virtio_disk_rw(struct buf *, int);
- void            virtio_disk_intr(void);
- 
-+// mlfq.c
-+void            mlfqinit(void);
-+void            enqueue(struct queue*, struct proc*);
-+void            dequeue(struct queue*, struct proc*);
-+struct proc*    round_robin(struct queue*);
-+struct proc*    lottery(struct queue*);
-+int             demote(struct mlfq*, struct proc*);
-+void            remove_proc_from_mlfq(struct mlfq*, struct proc*);
-+int             promote(struct mlfq*, struct proc*);
-+
- // number of elements in fixed-size array
- #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
 diff --git a/kernel/kernelvec.S b/kernel/kernelvec.S
 index a18ecbb..23501c4 100644
 --- a/kernel/kernelvec.S
@@ -155,210 +138,16 @@ index 0000000..eeaf168
 +
 +#endif // _LOG_H_
 \ No newline at end of file
-diff --git a/kernel/main.c b/kernel/main.c
-index f0d3171..4b43f64 100644
---- a/kernel/main.c
-+++ b/kernel/main.c
-@@ -28,6 +28,7 @@ main()
-     iinit();         // inode table
-     fileinit();      // file table
-     virtio_disk_init(); // emulated hard disk
-+    mlfqinit();      // scheduler mlfq init
-     userinit();      // first user process
-     __sync_synchronize();
-     started = 1;
-@@ -40,6 +41,5 @@ main()
-     trapinithart();   // install kernel trap vector
-     plicinithart();   // ask PLIC for device interrupts
-   }
--
-   scheduler();        
- }
-diff --git a/kernel/mlfq.c b/kernel/mlfq.c
-new file mode 100644
-index 0000000..7fa59a1
---- /dev/null
-+++ b/kernel/mlfq.c
-@@ -0,0 +1,152 @@
-+//
-+// Support functions for mlfq.
-+//
-+
-+#include "types.h"
-+#include "riscv.h"
-+#include "defs.h"
-+#include "param.h"
-+#include "spinlock.h"
-+#include "proc.h"
-+#include "mlfq.h"
-+
-+struct mlfq mlfq;
-+
-+static void reinitialize_tickets(struct queue*);
-+static int procidx(struct queue*, struct proc*);
-+
-+void 
-+mlfqinit(void)
-+{
-+  initlock(&mlfq.lock, "mlfq");
-+  mlfq.top_q.head = mlfq.top_q.tail = mlfq.bottom_q.head = mlfq.bottom_q.tail = 0;
-+}
-+
-+void 
-+enqueue(struct queue *q, struct proc *p) 
-+{
-+  if ((q->tail + 1) % NPROC == q->head)
-+    panic("Queue overflow");
-+  q->procs[q->tail] = p;
-+  q->tail = (q->tail + 1) % NPROC;
-+}
-+
-+void
-+dequeue(struct queue *q, struct proc* p) 
-+{
-+  if (q->head == q->tail)
-+    return;
-+  int index = procidx(q, p);
-+  if(index == -1)
-+    return;
-+  for (int i = index; i != q->tail; i = (i + 1) % NPROC) {
-+    int next = (i + 1) % NPROC;
-+    q->procs[i] = q->procs[next];
-+  }
-+  q->tail = (q->tail - 1 + NPROC) % NPROC;
-+}
-+
-+struct proc* 
-+round_robin(struct queue *q)
-+{
-+  for(int i = q->head; i < q->tail; i = (i + 1) % NPROC) {
-+    struct proc *p = q->procs[i];
-+    acquire(&p->lock);
-+    if(p->state == RUNNABLE) {
-+      release(&p->lock);
-+      return p;
-+    }
-+    release(&p->lock);
-+  }
-+  return 0;
-+}
-+
-+struct proc*
-+lottery(struct queue *q)
-+{
-+  int total_tickets = 0;
-+
-+  for (int i = q->head; i != q->tail; i = (i + 1) % NPROC) {
-+    struct proc *p = q->procs[i];
-+    acquire(&p->lock);
-+    if (p->state == RUNNABLE) {
-+      total_tickets += p->current_tickets;
-+    }
-+    release(&p->lock);
-+  }
-+
-+  if(!total_tickets) {
-+    reinitialize_tickets(q);
-+    return lottery(q);
-+  }
-+
-+  int winning_ticket = randrange(total_tickets);
-+  total_tickets = 0;
-+
-+  for (int i = q->head; i != q->tail; i = (i + 1) % NPROC) {
-+    struct proc *p = q->procs[i];
-+    acquire(&p->lock);
-+    if (p->state == RUNNABLE) {
-+      total_tickets += p->current_tickets;
-+      if (total_tickets > winning_ticket) {
-+        release(&p->lock);
-+        return p;
-+      }
-+    }
-+    release(&p->lock);
-+  }
-+  return 0;
-+}
-+
-+static void 
-+reinitialize_tickets(struct queue *q)
-+{
-+  for (int i = q->head; i != q->tail; i = (i + 1) % NPROC) {
-+    struct proc *p = q->procs[i];
-+    acquire(&p->lock);
-+    if (p && p->state == RUNNABLE) {
-+      p->current_tickets = p->initial_tickets;
-+    }
-+    release(&p->lock);
-+  }
-+}
-+
-+static int
-+procidx(struct queue *q, struct proc *p)
-+{
-+  for (int idx = q->head; idx != q->tail; idx = (idx + 1) % NPROC) {
-+    struct proc *itr = q->procs[idx];
-+    acquire(&itr->lock);
-+    if(p->pid == itr->pid) {
-+      release(&itr->lock);
-+      return idx;
-+    }
-+    release(&itr->lock);
-+  }
-+  return -1;
-+}
-+
-+void
-+remove_proc_from_mlfq(struct mlfq* mlfq, struct proc *p)
-+{
-+  if(p->level == TOP_Q) dequeue(&mlfq->top_q, p);
-+  else dequeue(&mlfq->bottom_q, p);
-+}
-+
-+int
-+promote(struct mlfq* mlfq, struct proc* p)
-+{
-+  if(p->level == TOP_Q) return 0;
-+  dequeue(&mlfq->bottom_q, p);
-+  enqueue(&mlfq->top_q, p);
-+  return 1;
-+}
-+
-+int
-+demote(struct mlfq* mlfq, struct proc* p)
-+{
-+  if(p->level == BOTTOM_Q) return 0;
-+  dequeue(&mlfq->top_q, p);
-+  enqueue(&mlfq->bottom_q, p);
-+  return 1;
-+}
-\ No newline at end of file
 diff --git a/kernel/mlfq.h b/kernel/mlfq.h
 new file mode 100644
-index 0000000..8b6e401
+index 0000000..0749db8
 --- /dev/null
 +++ b/kernel/mlfq.h
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,6 @@
 +#ifndef _MLFQ_H_
 +#define _MLFQ_H_
 +
-+#include "types.h"
-+#include "proc.h"
-+#include "param.h"
-+#include "spinlock.h"
-+
 +enum queuelevel { TOP_Q, BOTTOM_Q };
-+
-+struct queue {
-+  struct proc *procs[NPROC];  // Array of process pointers
-+  int head;                   // Index of the first process in the queue
-+  int tail;                   // Index of the next free slot
-+};
-+
-+struct mlfq {
-+  struct queue top_q, bottom_q; // Two queues for MLFQ
-+  struct spinlock lock;         // Lock to protect access to the MLFQ
-+};
 +
 +#endif // _MLFQ_H_
 diff --git a/kernel/param.h b/kernel/param.h
