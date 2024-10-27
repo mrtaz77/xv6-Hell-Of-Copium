@@ -186,7 +186,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..a684436 100644
+index 58a8a0b..1e40827 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,10 @@
@@ -253,7 +253,15 @@ index 58a8a0b..a684436 100644
  
    release(&p->lock);
  }
-@@ -448,28 +470,125 @@ scheduler(void)
+@@ -320,6 +342,7 @@ fork(void)
+ 
+   acquire(&np->lock);
+   np->state = RUNNABLE;
++  np->initial_tickets = np->current_tickets = p->initial_tickets;
+   release(&np->lock);
+ 
+   return pid;
+@@ -448,28 +471,124 @@ scheduler(void)
    struct cpu *c = mycpu();
  
    c->proc = 0;
@@ -297,7 +305,6 @@ index 58a8a0b..a684436 100644
 +          // Switch to chosen process.  It is the process's job
 +          // to release its lock and then reacquire it
 +          // before jumping back to us.
-+
 +          int initial_ticks = p->consumed_timer_ticks;
 +          while(p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_0 && p->state == RUNNABLE) {
 +            p->state = RUNNING;
