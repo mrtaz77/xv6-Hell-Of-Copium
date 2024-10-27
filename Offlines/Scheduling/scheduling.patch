@@ -194,7 +194,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..c7a6088 100644
+index 58a8a0b..b2b5cf7 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,9 @@
@@ -270,7 +270,7 @@ index 58a8a0b..c7a6088 100644
    release(&np->lock);
  
    acquire(&wait_lock);
-@@ -448,28 +472,118 @@ scheduler(void)
+@@ -448,28 +472,120 @@ scheduler(void)
    struct cpu *c = mycpu();
  
    c->proc = 0;
@@ -282,14 +282,6 @@ index 58a8a0b..c7a6088 100644
      intr_on();
  
 +    int lottery_tickets = 0;
-+    for(p = proc; p < &proc[NPROC]; p++) {
-+      if(p->level == TOP_Q && p->state == RUNNABLE) lottery_tickets += p->current_tickets;
-+    }
-+
-+    int winning_ticket = randrange(lottery_tickets);
-+    int ticket_count = 0;
-+    int p_in_q0 = 0;
-+
      for(p = proc; p < &proc[NPROC]; p++) {
        acquire(&p->lock);
 -      if(p->state == RUNNABLE) {
@@ -303,6 +295,16 @@ index 58a8a0b..c7a6088 100644
 -        // Process is done running for now.
 -        // It should have changed its p->state before coming back.
 -        c->proc = 0;
++      if(p->level == TOP_Q && p->state == RUNNABLE) lottery_tickets += p->current_tickets;
++      release(&p->lock);
++    }
++
++    int winning_ticket = randrange(lottery_tickets);
++    int ticket_count = 0;
++    int p_in_q0 = 0;
++
++    for(p = proc; p < &proc[NPROC]; p++) {
++      acquire(&p->lock);
 +      if(p->level == TOP_Q && p->state == RUNNABLE) {
 +        p_in_q0 = 1;
 +        ticket_count += p->current_tickets;
@@ -400,7 +402,7 @@ index 58a8a0b..c7a6088 100644
    }
  }
  
-@@ -509,6 +623,7 @@ yield(void)
+@@ -509,6 +625,7 @@ yield(void)
    p->state = RUNNABLE;
    sched();
    release(&p->lock);
@@ -408,7 +410,7 @@ index 58a8a0b..c7a6088 100644
  }
  
  // A fork child's very first scheduling by scheduler()
-@@ -564,6 +679,7 @@ sleep(void *chan, struct spinlock *lk)
+@@ -564,6 +681,7 @@ sleep(void *chan, struct spinlock *lk)
    // Reacquire original lock.
    release(&p->lock);
    acquire(lk);
@@ -416,7 +418,7 @@ index 58a8a0b..c7a6088 100644
  }
  
  // Wake up all processes sleeping on chan.
-@@ -686,3 +802,91 @@ procdump(void)
+@@ -686,3 +804,91 @@ procdump(void)
      printf("\n");
    }
  }
