@@ -1,17 +1,18 @@
 diff --git a/Makefile b/Makefile
-index 62fd0f8..284d017 100644
+index 62fd0f8..0341e01 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -28,7 +28,7 @@ OBJS = \
+@@ -28,7 +28,8 @@ OBJS = \
    $K/sysfile.o \
    $K/kernelvec.o \
    $K/plic.o \
 -  $K/virtio_disk.o
 +  $K/virtio_disk.o \
++  $K/random.o
  
  # riscv64-unknown-elf- or riscv64-linux-gnu-
  # perhaps in /opt/riscv/bin
-@@ -56,7 +56,7 @@ LD = $(TOOLPREFIX)ld
+@@ -56,7 +57,7 @@ LD = $(TOOLPREFIX)ld
  OBJCOPY = $(TOOLPREFIX)objcopy
  OBJDUMP = $(TOOLPREFIX)objdump
  
@@ -20,7 +21,7 @@ index 62fd0f8..284d017 100644
  CFLAGS += -MD
  CFLAGS += -mcmodel=medany
  # CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
-@@ -139,6 +139,13 @@ UPROGS=\
+@@ -139,6 +140,13 @@ UPROGS=\
  	$U/_grind\
  	$U/_wc\
  	$U/_zombie\
@@ -34,7 +35,7 @@ index 62fd0f8..284d017 100644
  
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
-@@ -160,7 +167,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
+@@ -160,7 +168,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
  	then echo "-gdb tcp::$(GDBPORT)"; \
  	else echo "-s -p $(GDBPORT)"; fi)
  ifndef CPUS
@@ -44,7 +45,7 @@ index 62fd0f8..284d017 100644
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..b60b123 100644
+index d1b6bb9..13eda18 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
 @@ -8,6 +8,10 @@ struct spinlock;
@@ -79,6 +80,15 @@ index d1b6bb9..b60b123 100644
  
  // swtch.S
  void            swtch(struct context*, struct context*);
+@@ -185,5 +194,8 @@ void            virtio_disk_init(void);
+ void            virtio_disk_rw(struct buf *, int);
+ void            virtio_disk_intr(void);
+ 
++// random.c
++int             lcg(int);
++
+ // number of elements in fixed-size array
+ #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
 diff --git a/kernel/kernelvec.S b/kernel/kernelvec.S
 index a18ecbb..23501c4 100644
 --- a/kernel/kernelvec.S
@@ -184,27 +194,23 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..1e40827 100644
+index 58a8a0b..96fe259 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
-@@ -5,6 +5,10 @@
+@@ -5,6 +5,9 @@
  #include "spinlock.h"
  #include "proc.h"
  #include "defs.h"
 +#include "random.h"
-+#include "mlfq.h"
 +#include "pstat.h"
 +#include "log.h"
  
  struct cpu cpus[NCPU];
  
-@@ -26,6 +30,13 @@ extern char trampoline[]; // trampoline.S
+@@ -26,6 +29,10 @@ extern char trampoline[]; // trampoline.S
  // must be acquired before any p->lock.
  struct spinlock wait_lock;
  
-+// multilevel feedback queue for scheduling
-+extern struct mlfq mlfq;
-+
 +// debug
 +int LOG = 1;
 +struct spinlock log_lock;
@@ -212,7 +218,7 @@ index 58a8a0b..1e40827 100644
  // Allocate a page for each process's kernel stack.
  // Map it high in memory, followed by an invalid
  // guard page.
-@@ -51,6 +62,8 @@ procinit(void)
+@@ -51,6 +58,8 @@ procinit(void)
    
    initlock(&pid_lock, "nextpid");
    initlock(&wait_lock, "wait_lock");
@@ -221,7 +227,7 @@ index 58a8a0b..1e40827 100644
    for(p = proc; p < &proc[NPROC]; p++) {
        initlock(&p->lock, "proc");
        p->state = UNUSED;
-@@ -146,6 +159,11 @@ found:
+@@ -146,6 +155,11 @@ found:
    p->context.ra = (uint64)forkret;
    p->context.sp = p->kstack + PGSIZE;
  
@@ -233,7 +239,7 @@ index 58a8a0b..1e40827 100644
    return p;
  }
  
-@@ -169,6 +187,9 @@ freeproc(struct proc *p)
+@@ -169,6 +183,9 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
@@ -243,7 +249,7 @@ index 58a8a0b..1e40827 100644
  }
  
  // Create a user page table for a given process, with no user memory,
-@@ -250,6 +271,7 @@ userinit(void)
+@@ -250,6 +267,7 @@ userinit(void)
    p->cwd = namei("/");
  
    p->state = RUNNABLE;
@@ -251,7 +257,7 @@ index 58a8a0b..1e40827 100644
  
    release(&p->lock);
  }
-@@ -320,6 +342,7 @@ fork(void)
+@@ -320,6 +338,7 @@ fork(void)
  
    acquire(&np->lock);
    np->state = RUNNABLE;
@@ -259,7 +265,7 @@ index 58a8a0b..1e40827 100644
    release(&np->lock);
  
    return pid;
-@@ -448,28 +471,124 @@ scheduler(void)
+@@ -448,28 +467,124 @@ scheduler(void)
    struct cpu *c = mycpu();
  
    c->proc = 0;
@@ -395,7 +401,7 @@ index 58a8a0b..1e40827 100644
    }
  }
  
-@@ -509,6 +628,7 @@ yield(void)
+@@ -509,6 +624,7 @@ yield(void)
    p->state = RUNNABLE;
    sched();
    release(&p->lock);
@@ -403,7 +409,7 @@ index 58a8a0b..1e40827 100644
  }
  
  // A fork child's very first scheduling by scheduler()
-@@ -564,6 +684,7 @@ sleep(void *chan, struct spinlock *lk)
+@@ -564,6 +680,7 @@ sleep(void *chan, struct spinlock *lk)
    // Reacquire original lock.
    release(&p->lock);
    acquire(lk);
@@ -411,7 +417,7 @@ index 58a8a0b..1e40827 100644
  }
  
  // Wake up all processes sleeping on chan.
-@@ -686,3 +807,68 @@ procdump(void)
+@@ -686,3 +803,68 @@ procdump(void)
      printf("\n");
    }
  }
@@ -429,7 +435,7 @@ index 58a8a0b..1e40827 100644
 +{
 +  int random;
 +  acquire(&seed_lock);
-+  seed = (A * seed + C) % M;
++  seed = lcg(seed);
 +  random = seed % upper_limit + 1;
 +  release(&seed_lock);
 +  return random;
@@ -535,12 +541,32 @@ index 0000000..d9ea295
 +};
 +
 +#endif // _PSTAT_H_
+diff --git a/kernel/random.c b/kernel/random.c
+new file mode 100644
+index 0000000..30e757a
+--- /dev/null
++++ b/kernel/random.c
+@@ -0,0 +1,13 @@
++#include "types.h"
++#include "random.h"
++
++// Deterministic seed
++int seed = 101;
++struct spinlock seed_lock;
++
++// Linear Congruential Generator (Pseudo random)
++int 
++lcg(int seed)
++{
++  return (A * seed + C) % M;
++}
+\ No newline at end of file
 diff --git a/kernel/random.h b/kernel/random.h
 new file mode 100644
-index 0000000..523580d
+index 0000000..040e84e
 --- /dev/null
 +++ b/kernel/random.h
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,15 @@
 +#ifndef _RANDOM_H_
 +#define _RANDOM_H_
 +
@@ -550,8 +576,10 @@ index 0000000..523580d
 +
 +#include "spinlock.h"
 +
-+int seed = 1337;
-+struct spinlock seed_lock;
++extern int seed;
++extern struct spinlock seed_lock;
++
++int lcg(int seed);
 +
 +#endif // _RANDOM_H_
 diff --git a/kernel/spinlock.h b/kernel/spinlock.h
@@ -803,12 +831,16 @@ index 0000000..a2fd62a
 \ No newline at end of file
 diff --git a/user/dummyproc.c b/user/dummyproc.c
 new file mode 100644
-index 0000000..067dc10
+index 0000000..4750ae3
 --- /dev/null
 +++ b/user/dummyproc.c
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,62 @@
 +#include "kernel/types.h"
 +#include "user/user.h"
++
++#ifndef CHILD_SLEEP
++#define CHILD_SLEEP 10
++#endif
 +
 +static void run(int, uint32);
 +
@@ -858,7 +890,7 @@ index 0000000..067dc10
 +    uint32 interval = iterations / tickets;
 +    for(uint32 i = 0; i < iterations; i++) {
 +      if(!(i % interval)) {
-+        sleep(5);
++        sleep(CHILD_SLEEP);
 +        printf("Inside Child: PID %d with %d tickets ran for %d loops\n", getpid(), tickets, i);
 +      }
 +    }
