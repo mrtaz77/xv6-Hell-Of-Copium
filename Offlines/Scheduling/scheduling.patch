@@ -194,7 +194,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..b2b5cf7 100644
+index 58a8a0b..97e4a4c 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,9 @@
@@ -418,7 +418,7 @@ index 58a8a0b..b2b5cf7 100644
  }
  
  // Wake up all processes sleeping on chan.
-@@ -686,3 +804,91 @@ procdump(void)
+@@ -686,3 +804,92 @@ procdump(void)
      printf("\n");
    }
  }
@@ -434,6 +434,7 @@ index 58a8a0b..b2b5cf7 100644
 +int
 +randrange(int upper_limit)
 +{
++  if(upper_limit < 1) return -1;
 +  int random;
 +  acquire(&seed_lock);
 +  seed = lcg(seed);
