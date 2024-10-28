@@ -194,7 +194,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..97e4a4c 100644
+index 58a8a0b..4dcb82e 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,9 @@
@@ -270,7 +270,7 @@ index 58a8a0b..97e4a4c 100644
    release(&np->lock);
  
    acquire(&wait_lock);
-@@ -448,28 +472,120 @@ scheduler(void)
+@@ -448,28 +472,122 @@ scheduler(void)
    struct cpu *c = mycpu();
  
    c->proc = 0;
@@ -282,6 +282,7 @@ index 58a8a0b..97e4a4c 100644
      intr_on();
  
 +    int lottery_tickets = 0;
++    int p_in_q0 = 0;
      for(p = proc; p < &proc[NPROC]; p++) {
        acquire(&p->lock);
 -      if(p->state == RUNNABLE) {
@@ -295,64 +296,66 @@ index 58a8a0b..97e4a4c 100644
 -        // Process is done running for now.
 -        // It should have changed its p->state before coming back.
 -        c->proc = 0;
-+      if(p->level == TOP_Q && p->state == RUNNABLE) lottery_tickets += p->current_tickets;
-+      release(&p->lock);
-+    }
-+
-+    int winning_ticket = randrange(lottery_tickets);
-+    int ticket_count = 0;
-+    int p_in_q0 = 0;
-+
-+    for(p = proc; p < &proc[NPROC]; p++) {
-+      acquire(&p->lock);
 +      if(p->level == TOP_Q && p->state == RUNNABLE) {
 +        p_in_q0 = 1;
-+        ticket_count += p->current_tickets;
-+        if(ticket_count >= winning_ticket) {
-+          if(LOG) {
-+            printf("%sLOTTERY: Process %d (%s) won in queue %d with %d tickets%s\n"
-+            , HBLU, p->pid, p->name, p->level, p->current_tickets, COLOR_RESET);
-+          }
-+          // Switch to chosen process.  It is the process's job
-+          // to release its lock and then reacquire it
-+          // before jumping back to us.
-+          int initial_ticks = p->consumed_timer_ticks;
-+          while(p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_0 && p->state == RUNNABLE) {
-+            p->state = RUNNING;
-+            c->proc = p;
-+            swtch(&c->context, &p->context);
-+            p->consumed_timer_ticks++;
-+            increment_q_ticks_in_proc_table();
-+            if(LOG) {
-+              printf("\t%sProcess %d has spent %d ticks in queue %d%s\n",
-+              HYEL, p->pid, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
-+            }
-+
-+            if(p->state == RUNNABLE && p->consumed_timer_ticks - initial_ticks == TIME_LIMIT_0) {
-+              p->level = BOTTOM_Q;
-+              if(LOG) {
-+                printf("%sDEMO: Process %d (%s) ran for %d timer ticks, demoted to queue %d%s\n",
-+                HRED, p->pid, p->name, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
-+              }
-+            }
-+          }
-+          p->times_scheduled++;
-+          p->current_tickets--;
-+          // Process is done running for now.
-+          // It should have changed its p->state before coming back.
-+          c->proc = 0;
-+          release(&p->lock);
-+          break;
-+        }
++        lottery_tickets += p->current_tickets;
        }
        release(&p->lock);
      }
 +
-+    if(p_in_q0 && !ticket_count) {
-+      reinitialize_tickets();
-+    }
++    if(p_in_q0) {
++      if(lottery_tickets == 0) {
++        reinitialize_tickets();
++        continue;
++      } else {
++        int winning_ticket = randrange(lottery_tickets);
++        int ticket_count = 0;
 +
-+    if(!p_in_q0) {
++        for(p = proc; p < &proc[NPROC]; p++) {
++          acquire(&p->lock);
++          if(p->level == TOP_Q && p->state == RUNNABLE) {
++            ticket_count += p->current_tickets;
++            if(ticket_count >= winning_ticket) {
++              if(LOG) {
++                printf("%sLOTTERY: Process %d (%s) won in queue %d with %d tickets%s\n"
++                , HBLU, p->pid, p->name, p->level, p->current_tickets, COLOR_RESET);
++              }
++              // Switch to chosen process.  It is the process's job
++              // to release its lock and then reacquire it
++              // before jumping back to us.
++              int initial_ticks = p->consumed_timer_ticks;
++              while(p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_0 && p->state == RUNNABLE) {
++                p->state = RUNNING;
++                c->proc = p;
++                swtch(&c->context, &p->context);
++                p->consumed_timer_ticks++;
++                increment_q_ticks_in_proc_table();
++                if(LOG) {
++                  printf("\t%sProcess %d has spent %d ticks in queue %d%s\n",
++                  HYEL, p->pid, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
++                }
++
++                if(p->state == RUNNABLE && p->consumed_timer_ticks - initial_ticks == TIME_LIMIT_0) {
++                  p->level = BOTTOM_Q;
++                  if(LOG) {
++                    printf("%sDEMO: Process %d (%s) ran for %d timer ticks, demoted to queue %d%s\n",
++                    HRED, p->pid, p->name, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
++                  }
++                }
++              }
++              p->times_scheduled++;
++              p->current_tickets--;
++              // Process is done running for now.
++              // It should have changed its p->state before coming back.
++              c->proc = 0;
++              release(&p->lock);
++              break;
++            }
++          }
++          release(&p->lock);
++        }
++      }
++    } else {
 +      for (int i = 0; i < NPROC; i++) {
 +        int idx = (round_robin_winner + 1 + i) % NPROC;
 +        p = &proc[idx];
@@ -389,7 +392,6 @@ index 58a8a0b..97e4a4c 100644
 +            }
 +          }
 +          p->times_scheduled++;
-+          p->current_tickets--;
 +          // Process is done running for now.
 +          // It should have changed its p->state before coming back.
 +          c->proc = 0;
@@ -402,7 +404,7 @@ index 58a8a0b..97e4a4c 100644
    }
  }
  
-@@ -509,6 +625,7 @@ yield(void)
+@@ -509,6 +627,7 @@ yield(void)
    p->state = RUNNABLE;
    sched();
    release(&p->lock);
@@ -410,7 +412,7 @@ index 58a8a0b..97e4a4c 100644
  }
  
  // A fork child's very first scheduling by scheduler()
-@@ -564,6 +681,7 @@ sleep(void *chan, struct spinlock *lk)
+@@ -564,6 +683,7 @@ sleep(void *chan, struct spinlock *lk)
    // Reacquire original lock.
    release(&p->lock);
    acquire(lk);
@@ -418,7 +420,7 @@ index 58a8a0b..97e4a4c 100644
  }
  
  // Wake up all processes sleeping on chan.
-@@ -686,3 +804,92 @@ procdump(void)
+@@ -686,3 +806,92 @@ procdump(void)
      printf("\n");
    }
  }
@@ -855,7 +857,7 @@ index 0000000..6d0a66c
 \ No newline at end of file
 diff --git a/user/dummyproc.c b/user/dummyproc.c
 new file mode 100644
-index 0000000..9691a37
+index 0000000..f04412c
 --- /dev/null
 +++ b/user/dummyproc.c
 @@ -0,0 +1,62 @@
@@ -905,20 +907,20 @@ index 0000000..9691a37
 +  if(pid < 0)
 +    printf("Fork failed: %d\n", pid);
 +  if(pid > 0) {
-+    printf("PARENT: Called with %d tickets, %d iters. Parent will exit now.\n", tickets, iterations);
++    printf("PARENT: Called with %d tickets, %u iters. Parent will exit now.\n", tickets, iterations);
 +    for(uint32 i = 0; i < iterations; i++);
 +    printf("PARENT: Parent with pid %d exited with status 0\n", getpid());
 +  }
 +  else {
-+    printf("CHILD: process %d with %d tickets started for %d loops\n", getpid(), tickets, iterations);
++    printf("CHILD: process %d with %d tickets started for %u loops\n", getpid(), tickets, iterations);
 +    uint32 interval = iterations / tickets;
 +    for(uint32 i = 0; i < iterations; i++) {
 +      if(!(i % interval)) {
 +        sleep(CHILD_SLEEP);
-+        printf("Inside Child: PID %d with %d tickets ran for %d loops\n", getpid(), tickets, i);
++        printf("Inside Child: PID %d with %d tickets ran for %u loops\n", getpid(), tickets, i);
 +      }
 +    }
-+    printf("CHILD: process %d with %d tickets ran for %d loops\n", getpid(), tickets, iterations);
++    printf("CHILD: process %d with %d tickets ran for %u loops\n", getpid(), tickets, iterations);
 +  }
 +}
 \ No newline at end of file
