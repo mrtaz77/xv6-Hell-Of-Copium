@@ -195,7 +195,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..c63dcad 100644
+index 58a8a0b..268a662 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,9 @@
@@ -241,7 +241,7 @@ index 58a8a0b..c63dcad 100644
 +  p->consumed_timer_ticks = p->times_scheduled = 0;
 +  p->queue_ticks[TOP_Q] = p->queue_ticks[BOTTOM_Q] = 0;
 +  p->level = TOP_Q;
-+  p->waiting_time = 0;
++  p->running_time = p->waiting_time = 0;
 +
    return p;
  }
@@ -253,7 +253,7 @@ index 58a8a0b..c63dcad 100644
 +  p->current_tickets = p->initial_tickets = 0;
 +  p->consumed_timer_ticks = p->times_scheduled = 0;
 +  p->queue_ticks[TOP_Q] = p->queue_ticks[BOTTOM_Q] = 0;
-+  p->waiting_time = 0;
++  p->running_time = p->waiting_time = 0;
  }
  
  // Create a user page table for a given process, with no user memory,
@@ -265,16 +265,18 @@ index 58a8a0b..c63dcad 100644
  
    release(&p->lock);
  }
-@@ -312,6 +337,8 @@ fork(void)
+@@ -312,6 +337,10 @@ fork(void)
  
    pid = np->pid;
  
++  acquire(&p->lock);
 +  np->initial_tickets = np->current_tickets = p->initial_tickets;
++  release(&p->lock);  
 +
    release(&np->lock);
  
    acquire(&wait_lock);
-@@ -448,28 +475,129 @@ scheduler(void)
+@@ -448,28 +477,130 @@ scheduler(void)
    struct cpu *c = mycpu();
  
    c->proc = 0;
@@ -328,13 +330,13 @@ index 58a8a0b..c63dcad 100644
 +              // to release its lock and then reacquire it
 +              // before jumping back to us.
 +              int initial_ticks = p->consumed_timer_ticks;
++              p->running_time = p->waiting_time = 0;
 +              while(p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_0 && p->state == RUNNABLE) {
 +                p->state = RUNNING;
-+                p->waiting_time = 0;
 +                c->proc = p;
 +                swtch(&c->context, &p->context);
 +                p->consumed_timer_ticks++;
-+                
++                p->running_time++;
 +                if(LOG) {
 +                  printf("\t%sProcess %d has spent %d ticks in queue %d%s\n",
 +                  HYEL, p->pid, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
@@ -379,12 +381,13 @@ index 58a8a0b..c63dcad 100644
 +          // before jumping back to us.
 +
 +          int initial_ticks = p->consumed_timer_ticks;
++          p->running_time = p->waiting_time = 0;
 +          while(p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_1 && p->state == RUNNABLE) {
 +            p->state = RUNNING;
-+            p->waiting_time = 0;
 +            c->proc = p;
 +            swtch(&c->context, &p->context);
 +            p->consumed_timer_ticks++;
++            p->running_time++;
 +            if(LOG) {
 +              printf("\t%sProcess %d has spent %d ticks in queue %d%s\n",
 +              HYEL, p->pid, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
@@ -415,7 +418,7 @@ index 58a8a0b..c63dcad 100644
    }
  }
  
-@@ -509,6 +637,7 @@ yield(void)
+@@ -509,6 +640,7 @@ yield(void)
    p->state = RUNNABLE;
    sched();
    release(&p->lock);
@@ -423,7 +426,7 @@ index 58a8a0b..c63dcad 100644
  }
  
  // A fork child's very first scheduling by scheduler()
-@@ -564,6 +693,7 @@ sleep(void *chan, struct spinlock *lk)
+@@ -564,6 +696,7 @@ sleep(void *chan, struct spinlock *lk)
    // Reacquire original lock.
    release(&p->lock);
    acquire(lk);
@@ -431,7 +434,7 @@ index 58a8a0b..c63dcad 100644
  }
  
  // Wake up all processes sleeping on chan.
-@@ -686,3 +816,114 @@ procdump(void)
+@@ -686,3 +819,114 @@ procdump(void)
      printf("\n");
    }
  }
@@ -479,7 +482,7 @@ index 58a8a0b..c63dcad 100644
 +    kernel_pstat.inuse[i] = (p->state == RUNNABLE || p->state == RUNNING);
 +    kernel_pstat.inQ[i] = p->level;
 +    kernel_pstat.waiting_time[i] = p->waiting_time;
-+    kernel_pstat.running_time[i] = 0;
++    kernel_pstat.running_time[i] = p->running_time;
 +    kernel_pstat.times_scheduled[i] = p->times_scheduled;
 +    kernel_pstat.tickets_original[i] = p->initial_tickets;
 +    kernel_pstat.tickets_current[i] = p->current_tickets;
@@ -547,7 +550,7 @@ index 58a8a0b..c63dcad 100644
 +  }
 +}
 diff --git a/kernel/proc.h b/kernel/proc.h
-index d021857..bd90485 100644
+index d021857..89c6015 100644
 --- a/kernel/proc.h
 +++ b/kernel/proc.h
 @@ -1,3 +1,8 @@
@@ -559,7 +562,7 @@ index d021857..bd90485 100644
  // Saved registers for kernel context switches.
  struct context {
    uint64 ra;
-@@ -91,6 +96,13 @@ struct proc {
+@@ -91,6 +96,14 @@ struct proc {
    int killed;                  // If non-zero, have been killed
    int xstate;                  // Exit status to be returned to parent's wait
    int pid;                     // Process ID
@@ -570,10 +573,11 @@ index d021857..bd90485 100644
 +  int times_scheduled;         // Total number of times the process was scheduled
 +  uint queue_ticks[2];         // Total number of ticks the process has spent in each queue
 +  int waiting_time;            // Ticks spent before being scheduled (should be incremented only when the process is RUNNABLE)
++  int running_time;            // Ticks spent before using up it’s allocated time slice
  
    // wait_lock must be held when using this:
    struct proc *parent;         // Parent process
-@@ -105,3 +117,5 @@ struct proc {
+@@ -105,3 +118,5 @@ struct proc {
    struct inode *cwd;           // Current directory
    char name[16];               // Process name (debugging)
  };
@@ -891,15 +895,19 @@ index 0000000..6d0a66c
 \ No newline at end of file
 diff --git a/user/dummyproc.c b/user/dummyproc.c
 new file mode 100644
-index 0000000..85e2e5f
+index 0000000..7627a6f
 --- /dev/null
 +++ b/user/dummyproc.c
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,69 @@
 +#include "kernel/types.h"
 +#include "user/user.h"
 +
 +#ifndef CHILD_SLEEP
-+#define CHILD_SLEEP 10
++#define CHILD_SLEEP 2
++#endif
++
++#ifndef CHILD_COUNT
++#define CHILD_COUNT 4
 +#endif
 +
 +static void run(int, uint32);
@@ -936,25 +944,28 @@ index 0000000..85e2e5f
 +static void
 +run(int tickets, uint32 iterations)
 +{
-+  int pid = fork();
-+
-+  if(pid < 0)
-+    printf("Fork failed: %d\n", pid);
-+  if(pid > 0) {
-+    printf("PARENT: Called with %d tickets, %u iters. Parent will exit now.\n", tickets, iterations);
-+    for(uint32 i = 0; i < iterations; i++);
-+    printf("PARENT: Parent with pid %d exited with status 0\n", getpid());
-+  }
-+  else {
-+    printf("CHILD: process %d with %d tickets started for %u loops\n", getpid(), tickets, iterations);
-+    uint32 interval = iterations / tickets;
-+    for(uint32 i = 0; i < iterations; i++) {
-+      if(!(i % interval)) {
-+        // sleep(CHILD_SLEEP);
-+        printf("Inside Child: PID %d with %d tickets ran for %u loops\n", getpid(), tickets, i);
-+      }
++  for(int i = 0; i < CHILD_COUNT; i++) {
++    int pid = fork();
++    if(pid < 0)
++      printf("Fork failed: %d\n", pid);
++    if(pid > 0) {
++      if(i) continue;
++      printf("PARENT: Parent with pid %d called with %d tickets, %u iters. Parent will exit now.\n", getpid(), tickets, iterations);
++      for(uint32 i = 0; i < iterations; i++);
++      printf("PARENT: Parent with pid %d exited with status 0\n", getpid());
 +    }
-+    printf("CHILD: process %d with %d tickets ran for %u loops\n", getpid(), tickets, iterations);
++    else {
++      printf("CHILD: process %d with %d tickets started for %u loops\n", getpid(), tickets, iterations);
++      uint32 interval = iterations / tickets;
++      for(uint32 i = 0; i < iterations; i++) {
++        if(!(i % interval)) {
++          sleep(CHILD_SLEEP);
++          printf("Inside Child: PID %d with %d tickets ran for %u loops\n", getpid(), tickets, i);
++        }
++      }
++      printf("CHILD: process %d with %d tickets ran for %u loops\n", getpid(), tickets, iterations);
++      return;
++    }
 +  }
 +}
 \ No newline at end of file
