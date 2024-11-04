@@ -195,7 +195,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..2dbca0b 100644
+index 58a8a0b..3fb008b 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,9 @@
@@ -208,15 +208,21 @@ index 58a8a0b..2dbca0b 100644
  
  struct cpu cpus[NCPU];
  
-@@ -26,6 +29,15 @@ extern char trampoline[]; // trampoline.S
+@@ -26,6 +29,21 @@ extern char trampoline[]; // trampoline.S
  // must be acquired before any p->lock.
  struct spinlock wait_lock;
  
-+// debug
++// for debugging purposes
 +int LOG = 1;
 +struct spinlock log_lock;
++static void log_lottery_winner(struct proc*);
++static void log_round_robin_winner(struct proc*);
++static void log_process_ticks(struct proc*, int);
++static void log_demotion(struct proc*, int);
++static void log_promotion(struct proc*, int);
++static void log_boost(struct proc*);
 +
-+static void increment_q_ticks_in_proc_table(void);
++static void increment_q_ticks_in_proc_table(int);
 +static int reinitialize_tickets(void);
 +static void increment_waiting_time_of_other_runnable_processes(int);
 +static void boost(struct proc *);
@@ -224,7 +230,7 @@ index 58a8a0b..2dbca0b 100644
  // Allocate a page for each process's kernel stack.
  // Map it high in memory, followed by an invalid
  // guard page.
-@@ -51,6 +63,8 @@ procinit(void)
+@@ -51,6 +69,8 @@ procinit(void)
    
    initlock(&pid_lock, "nextpid");
    initlock(&wait_lock, "wait_lock");
@@ -233,7 +239,7 @@ index 58a8a0b..2dbca0b 100644
    for(p = proc; p < &proc[NPROC]; p++) {
        initlock(&p->lock, "proc");
        p->state = UNUSED;
-@@ -146,6 +160,12 @@ found:
+@@ -146,6 +166,12 @@ found:
    p->context.ra = (uint64)forkret;
    p->context.sp = p->kstack + PGSIZE;
  
@@ -246,7 +252,7 @@ index 58a8a0b..2dbca0b 100644
    return p;
  }
  
-@@ -169,6 +189,10 @@ freeproc(struct proc *p)
+@@ -169,6 +195,10 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
@@ -257,7 +263,7 @@ index 58a8a0b..2dbca0b 100644
  }
  
  // Create a user page table for a given process, with no user memory,
-@@ -312,6 +336,10 @@ fork(void)
+@@ -312,6 +342,10 @@ fork(void)
  
    pid = np->pid;
  
@@ -268,7 +274,7 @@ index 58a8a0b..2dbca0b 100644
    release(&np->lock);
  
    acquire(&wait_lock);
-@@ -448,28 +476,129 @@ scheduler(void)
+@@ -448,28 +482,110 @@ scheduler(void)
    struct cpu *c = mycpu();
  
    c->proc = 0;
@@ -314,10 +320,7 @@ index 58a8a0b..2dbca0b 100644
 +        if(p->level == TOP_Q && p->state == RUNNABLE) {
 +          ticket_count += p->current_tickets;
 +          if(ticket_count >= winning_ticket) {
-+            if(LOG) {
-+              printf("%sLOTTERY: Process %d (%s) won in queue %d with %d tickets%s\n"
-+              , HBLU, p->pid, p->name, p->level, p->current_tickets, COLOR_RESET);
-+            }
++            log_lottery_winner(p);
 +            // Switch to chosen process.  It is the process's job
 +            // to release its lock and then reacquire it
 +            // before jumping back to us.
@@ -329,20 +332,14 @@ index 58a8a0b..2dbca0b 100644
 +              swtch(&c->context, &p->context);
 +              p->consumed_timer_ticks++;
 +              p->running_time++;
-+              if(LOG) {
-+                printf("\t%sProcess %d has spent %d ticks in queue %d%s\n",
-+                HYEL, p->pid, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
-+              }
++              log_process_ticks(p, p->consumed_timer_ticks - initial_ticks);
 +
-+              increment_q_ticks_in_proc_table();
++              increment_q_ticks_in_proc_table(p->pid);
 +              increment_waiting_time_of_other_runnable_processes(p->pid);
 +
 +              if(p->state == RUNNABLE && p->consumed_timer_ticks - initial_ticks == TIME_LIMIT_0) {
 +                p->level = BOTTOM_Q;
-+                if(LOG) {
-+                  printf("%sDEMO: Process %d (%s) ran for %d timer ticks, demoted to queue %d%s\n",
-+                  HRED, p->pid, p->name, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
-+                }
++                log_demotion(p, p->consumed_timer_ticks - initial_ticks);
 +              }
 +            }
 +            p->times_scheduled++;
@@ -362,11 +359,7 @@ index 58a8a0b..2dbca0b 100644
 +        p = &proc[idx];
 +        acquire(&p->lock);
 +        if(p->level == BOTTOM_Q && p->state == RUNNABLE) {
-+          if(LOG) {
-+            printf("%sROUND-ROBIN: Process %d (%s) won in queue %d with %d tickets%s\n"
-+            , HMAG, p->pid, p->name, p->level, p->current_tickets, COLOR_RESET);
-+          }
-+
++          log_round_robin_winner(p);
 +          // Switch to chosen process.  It is the process's job
 +          // to release its lock and then reacquire it
 +          // before jumping back to us.
@@ -379,20 +372,14 @@ index 58a8a0b..2dbca0b 100644
 +            swtch(&c->context, &p->context);
 +            p->consumed_timer_ticks++;
 +            p->running_time++;
-+            if(LOG) {
-+              printf("\t%sProcess %d has spent %d ticks in queue %d%s\n",
-+              HYEL, p->pid, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
-+            }
++            log_process_ticks(p, p->consumed_timer_ticks - initial_ticks);
 +
-+            increment_q_ticks_in_proc_table();
++            increment_q_ticks_in_proc_table(p->pid);
 +            increment_waiting_time_of_other_runnable_processes(p->pid);
 +
 +            if(p->state == SLEEPING && p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_1) {
 +              p->level = TOP_Q;
-+              if(LOG) {
-+                printf("%sPROMO: Process %d (%s) ran for %d timer ticks, promoted to queue %d%s\n",
-+                HGRN, p->pid, p->name, p->consumed_timer_ticks - initial_ticks, p->level, COLOR_RESET);
-+              }
++              log_promotion(p, p->consumed_timer_ticks - initial_ticks);
 +              break;
 +            }
 +          }
@@ -409,23 +396,7 @@ index 58a8a0b..2dbca0b 100644
    }
  }
  
-@@ -509,6 +638,7 @@ yield(void)
-   p->state = RUNNABLE;
-   sched();
-   release(&p->lock);
-+  // printf("YIELD: %d\n", ticks);
- }
- 
- // A fork child's very first scheduling by scheduler()
-@@ -564,6 +694,7 @@ sleep(void *chan, struct spinlock *lk)
-   // Reacquire original lock.
-   release(&p->lock);
-   acquire(lk);
-+  // printf("SLEEP: %d\n", ticks);
- }
- 
- // Wake up all processes sleeping on chan.
-@@ -686,3 +817,117 @@ procdump(void)
+@@ -686,3 +802,186 @@ procdump(void)
      printf("\n");
    }
  }
@@ -497,12 +468,14 @@ index 58a8a0b..2dbca0b 100644
 +}
 +
 +static void
-+increment_q_ticks_in_proc_table(void)
++increment_q_ticks_in_proc_table(int pid)
 +{
 +  struct proc* p;
 +  for(p = proc; p < &proc[NPROC]; p++) {
 +    if(p->pid == 0) continue;
++    if(p->pid != pid) acquire(&p->lock);
 +    p->queue_ticks[p->level]++;
++    if(p->pid != pid) release(&p->lock);
 +  }
 +}
 +
@@ -525,11 +498,15 @@ index 58a8a0b..2dbca0b 100644
 +static void
 +increment_waiting_time_of_other_runnable_processes(int pid)
 +{
-+  struct proc *p = proc, *end = &proc[NPROC];
-+  for(; p < end; p++) {
-+    if(p->pid != pid && p->pid != 0 && p->state == RUNNABLE) {
-+      p->waiting_time++;
-+      if(p->level == BOTTOM_Q && p->waiting_time == WAIT_THRESH) boost(p);
++  struct proc* p;
++  for(p = proc; p < &proc[NPROC]; p++) {
++    if(p->pid != pid && p->pid != 0){
++      acquire(&p->lock);
++      if(p->state == RUNNABLE) {
++        p->waiting_time++;
++        if(p->level == BOTTOM_Q && p->waiting_time == WAIT_THRESH) boost(p);
++      }
++      release(&p->lock);
 +    }
 +  }
 +}
@@ -538,11 +515,75 @@ index 58a8a0b..2dbca0b 100644
 +boost(struct proc *p)
 +{
 +  p->level = TOP_Q;
++  log_boost(p);
++}
++
++static void
++log_lottery_winner(struct proc *p)
++{
++  acquire(&log_lock);
++  if (LOG) {
++    printf("%sLOTTERY: Process %d (%s) won in queue %d with %d tickets%s\n",
++          HBLU, p->pid, p->name, p->level, p->current_tickets, COLOR_RESET);
++  }
++  release(&log_lock);
++}
++
++static void
++log_round_robin_winner(struct proc *p)
++{
++  acquire(&log_lock);
++  if (LOG) {
++    printf("%sROUND-ROBIN: Process %d (%s) won in queue %d with %d tickets%s\n",
++          HMAG, p->pid, p->name, p->level, p->current_tickets, COLOR_RESET);
++  }
++  release(&log_lock);
++}
++
++static void
++log_process_ticks(struct proc *p, int consumed_ticks)
++{
++  acquire(&log_lock);
++  if (LOG) {
++    printf("\t%sProcess %d has spent %d ticks in queue %d%s\n",
++          HYEL, p->pid, consumed_ticks, p->level, COLOR_RESET);
++  }
++  release(&log_lock);
++}
++
++static void
++log_promotion(struct proc *p, int consumed_ticks)
++{
++  acquire(&log_lock);
++  if (LOG) {
++    printf("%sPROMO: Process %d (%s) ran for %d timer ticks, promoted to queue %d%s\n",
++            HGRN, p->pid, p->name, consumed_ticks, p->level, COLOR_RESET);
++  }
++  release(&log_lock);
++}
++
++static void
++log_demotion(struct proc *p, int consumed_ticks)
++{
++  acquire(&log_lock);
++  if (LOG) {
++    printf("%sDEMO: Process %d (%s) ran for %d timer ticks, demoted to queue %d%s\n",
++          HRED, p->pid, p->name, consumed_ticks, p->level, COLOR_RESET);
++  }
++  release(&log_lock);
++}
++
++static void
++log_boost(struct proc *p)
++{
++  acquire(&log_lock);
 +  if(LOG) {
 +    printf("%sBOOST: Process %d (%s) waited for %d ticks, promoted to queue %d%s\n",
 +    HGRN, p->pid, p->name, p->waiting_time, p->level, COLOR_RESET);
 +  }
++  release(&log_lock);
 +}
+\ No newline at end of file
 diff --git a/kernel/proc.h b/kernel/proc.h
 index d021857..89c6015 100644
 --- a/kernel/proc.h
