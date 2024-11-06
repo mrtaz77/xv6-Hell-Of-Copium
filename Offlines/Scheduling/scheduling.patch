@@ -45,7 +45,7 @@ index 62fd0f8..0341e01 100644
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..13eda18 100644
+index d1b6bb9..c1fdb40 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
 @@ -8,6 +8,10 @@ struct spinlock;
@@ -68,7 +68,7 @@ index d1b6bb9..13eda18 100644
  void            panic(char*) __attribute__((noreturn));
  void            printfinit(void);
  
-@@ -106,6 +110,11 @@ void            yield(void);
+@@ -106,6 +110,12 @@ void            yield(void);
  int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
  int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
  void            procdump(void);
@@ -77,10 +77,11 @@ index d1b6bb9..13eda18 100644
 +int             settickets(int);
 +int             getpinfo(struct pstat*);
 +int             togglelog(void);
++void            schedulerinit(void);
  
  // swtch.S
  void            swtch(struct context*, struct context*);
-@@ -185,5 +194,8 @@ void            virtio_disk_init(void);
+@@ -185,5 +195,8 @@ void            virtio_disk_init(void);
  void            virtio_disk_rw(struct buf *, int);
  void            virtio_disk_intr(void);
  
@@ -147,6 +148,18 @@ index 0000000..a49f989
 +
 +#endif // _LOG_H_
 \ No newline at end of file
+diff --git a/kernel/main.c b/kernel/main.c
+index f0d3171..d6c0c4e 100644
+--- a/kernel/main.c
++++ b/kernel/main.c
+@@ -20,6 +20,7 @@ main()
+     kvminit();       // create kernel page table
+     kvminithart();   // turn on paging
+     procinit();      // process table
++    schedulerinit(); // scheduler variables and locks
+     trapinit();      // trap vectors
+     trapinithart();  // install kernel trap vector
+     plicinit();      // set up interrupt controller
 diff --git a/kernel/mlfq.h b/kernel/mlfq.h
 new file mode 100644
 index 0000000..4b43a51
@@ -195,7 +208,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..c68c3a7 100644
+index 58a8a0b..1ffaef8 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,9 @@
@@ -208,7 +221,7 @@ index 58a8a0b..c68c3a7 100644
  
  struct cpu cpus[NCPU];
  
-@@ -26,6 +29,24 @@ extern char trampoline[]; // trampoline.S
+@@ -26,6 +29,32 @@ extern char trampoline[]; // trampoline.S
  // must be acquired before any p->lock.
  struct spinlock wait_lock;
  
@@ -228,21 +241,20 @@ index 58a8a0b..c68c3a7 100644
 +static void boost(struct proc *);
 +
 +static int lottery_scheduler(struct cpu*);
-+static void round_robin_scheduler(struct cpu*, int*);
++
++int round_robin_idx = -1;
++struct spinlock round_robin_idx_lock;
++
++static void round_robin_scheduler(struct cpu*);
++static int increment_round_robin_index();
++
++
++static int run_process(struct cpu*, struct proc*, int, int, int);
 +
  // Allocate a page for each process's kernel stack.
  // Map it high in memory, followed by an invalid
  // guard page.
-@@ -51,6 +72,8 @@ procinit(void)
-   
-   initlock(&pid_lock, "nextpid");
-   initlock(&wait_lock, "wait_lock");
-+  initlock(&seed_lock, "seed_lock");
-+  initlock(&log_lock, "log_lock");
-   for(p = proc; p < &proc[NPROC]; p++) {
-       initlock(&p->lock, "proc");
-       p->state = UNUSED;
-@@ -146,6 +169,12 @@ found:
+@@ -146,6 +175,12 @@ found:
    p->context.ra = (uint64)forkret;
    p->context.sp = p->kstack + PGSIZE;
  
@@ -255,7 +267,7 @@ index 58a8a0b..c68c3a7 100644
    return p;
  }
  
-@@ -169,6 +198,10 @@ freeproc(struct proc *p)
+@@ -169,6 +204,10 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
@@ -266,7 +278,7 @@ index 58a8a0b..c68c3a7 100644
  }
  
  // Create a user page table for a given process, with no user memory,
-@@ -312,6 +345,10 @@ fork(void)
+@@ -312,6 +351,10 @@ fork(void)
  
    pid = np->pid;
  
@@ -277,7 +289,7 @@ index 58a8a0b..c68c3a7 100644
    release(&np->lock);
  
    acquire(&wait_lock);
-@@ -444,32 +481,128 @@ wait(uint64 addr)
+@@ -444,7 +487,6 @@ wait(uint64 addr)
  void
  scheduler(void)
  {
@@ -285,14 +297,11 @@ index 58a8a0b..c68c3a7 100644
    struct cpu *c = mycpu();
  
    c->proc = 0;
-+  int round_robin_winner = -1;
-   for(;;){
-     // The most recent process to run may have had interrupts
-     // turned off; enable them to avoid a deadlock if all
+@@ -454,23 +496,65 @@ scheduler(void)
      // processes are waiting.
      intr_on();
  
-+    if(!lottery_scheduler(c)) round_robin_scheduler(c, &round_robin_winner);
++    if(!lottery_scheduler(c)) round_robin_scheduler(c);
 +  }
 +}
 +
@@ -326,95 +335,46 @@ index 58a8a0b..c68c3a7 100644
 -        // Switch to chosen process.  It is the process's job
 -        // to release its lock and then reacquire it
 -        // before jumping back to us.
+-        p->state = RUNNING;
+-        c->proc = p;
+-        swtch(&c->context, &p->context);
+-
+-        // Process is done running for now.
+-        // It should have changed its p->state before coming back.
+-        c->proc = 0;
 +      if(p->level == TOP_Q && p->state == RUNNABLE) {
 +        ticket_count += p->current_tickets;
 +        if(ticket_count >= winning_ticket) {
 +          log_lottery_winner(p);
-+          // Switch to chosen process.  It is the process's job
-+          // to release its lock and then reacquire it
-+          // before jumping back to us.
-+          int initial_ticks = p->consumed_timer_ticks;
-+          p->running_time = p->waiting_time = 0;
-+          while(p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_0 && p->state == RUNNABLE) {
-+            p->state = RUNNING;
-+            c->proc = p;
-+            swtch(&c->context, &p->context);
-+            p->consumed_timer_ticks++;
-+            p->running_time++;
-+            log_process_ticks(p, p->consumed_timer_ticks - initial_ticks);
-+
-+            increment_q_ticks_in_proc_table(p->pid);
-+            increment_waiting_time_of_other_runnable_processes(p->pid);
-+
-+            if(p->state == RUNNABLE && p->consumed_timer_ticks - initial_ticks == TIME_LIMIT_0) {
-+              p->level = BOTTOM_Q;
-+              log_demotion(p, p->consumed_timer_ticks - initial_ticks);
-+            }
-+          }
-+          p->times_scheduled++;
-+          p->current_tickets--;
-+          // Process is done running for now.
-+          // It should have changed its p->state before coming back.
-+          c->proc = 0;
-+          release(&p->lock);
-+          return 1;
++          return run_process(c, p, TIME_LIMIT_0, 0, 1);
 +        }
-+      }
-+      release(&p->lock);
-+    }
-+  }
+       }
+       release(&p->lock);
+     }
+   }
 +  return 0;
 +}
 +
 +// round-robin scheduler
 +static void
-+round_robin_scheduler(struct cpu *c, int* round_robin_winner) {
++round_robin_scheduler(struct cpu *c) {
 +  struct proc* p;
 +  for (int i = 0; i < NPROC; i++) {
-+    int idx = (*round_robin_winner + 1 + i) % NPROC;
++    int idx = increment_round_robin_index();
 +    p = &proc[idx];
++
 +    acquire(&p->lock);
-+    if(p->level == BOTTOM_Q && p->state == RUNNABLE) {
-+      log_round_robin_winner(p);
-+      *round_robin_winner = idx;
-+      // Switch to chosen process.  It is the process's job
-+      // to release its lock and then reacquire it
-+      // before jumping back to us.
-+
-+      int initial_ticks = p->consumed_timer_ticks;
-+      p->running_time = p->waiting_time = 0;
-+      while(p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_1 && p->state == RUNNABLE) {
-         p->state = RUNNING;
-         c->proc = p;
-         swtch(&c->context, &p->context);
-+        p->consumed_timer_ticks++;
-+        p->running_time++;
-+        log_process_ticks(p, p->consumed_timer_ticks - initial_ticks);
-+
-+        increment_q_ticks_in_proc_table(p->pid);
-+        increment_waiting_time_of_other_runnable_processes(p->pid);
- 
--        // Process is done running for now.
--        // It should have changed its p->state before coming back.
--        c->proc = 0;
-+        if(p->state == SLEEPING && p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_1) {
-+          p->level = TOP_Q;
-+          log_promotion(p, p->consumed_timer_ticks - initial_ticks);
-+          break;
-+        }
-       }
-+      p->times_scheduled++;
-+      // Process is done running for now.
-+      // It should have changed its p->state before coming back.
-+      c->proc = 0;
-       release(&p->lock);
-+      return;
-     }
++    if (p->level == BOTTOM_Q && p->state == RUNNABLE) {
++        log_round_robin_winner(p);
++        run_process(c, p, TIME_LIMIT_1, 1, 0);
++        return;
++    }
 +    release(&p->lock);
-   }
++  }
  }
  
-@@ -686,3 +819,187 @@ procdump(void)
+ // Switch to scheduler.  Must hold only p->lock
+@@ -686,3 +770,237 @@ procdump(void)
      printf("\n");
    }
  }
@@ -602,6 +562,57 @@ index 58a8a0b..c68c3a7 100644
 +  }
 +  release(&log_lock);
 +}
++
++void
++schedulerinit(void)
++{
++  initlock(&seed_lock, "seed_lock");
++  initlock(&log_lock, "log_lock");
++  initlock(&round_robin_idx_lock, "round_robin_idx_lock");
++}
++
++static int
++increment_round_robin_index() {
++  acquire(&round_robin_idx_lock);
++  round_robin_idx = (round_robin_idx + 1) % NPROC;
++  int idx = round_robin_idx;
++  release(&round_robin_idx_lock);
++  return idx;
++}
++
++static int
++run_process(struct cpu *c, struct proc *p, int time_limit, int promote_on_sleep, int demote_on_time) {
++  int initial_ticks = p->consumed_timer_ticks;
++  p->running_time = p->waiting_time = 0;
++
++  while (p->consumed_timer_ticks - initial_ticks < time_limit && p->state == RUNNABLE) {
++    p->state = RUNNING;
++    c->proc = p;
++    swtch(&c->context, &p->context);
++    p->consumed_timer_ticks++;
++    p->running_time++;
++    log_process_ticks(p, p->consumed_timer_ticks - initial_ticks);
++
++    increment_q_ticks_in_proc_table(p->pid);
++    increment_waiting_time_of_other_runnable_processes(p->pid);
++
++    if (promote_on_sleep && p->state == SLEEPING) {
++      p->level = TOP_Q;
++      log_promotion(p, p->consumed_timer_ticks - initial_ticks);
++      break;
++    }
++    if (demote_on_time && p->state == RUNNABLE && p->consumed_timer_ticks - initial_ticks == time_limit) {
++      p->level = BOTTOM_Q;
++      log_demotion(p, p->consumed_timer_ticks - initial_ticks);
++    }
++  }
++
++  p->times_scheduled++;
++  c->proc = 0;
++  release(&p->lock);
++  return 1;
++}
+\ No newline at end of file
 diff --git a/kernel/proc.h b/kernel/proc.h
 index d021857..89c6015 100644
 --- a/kernel/proc.h
@@ -948,7 +959,7 @@ index 0000000..6d0a66c
 \ No newline at end of file
 diff --git a/user/dummyproc.c b/user/dummyproc.c
 new file mode 100644
-index 0000000..bc2f807
+index 0000000..6d528e5
 --- /dev/null
 +++ b/user/dummyproc.c
 @@ -0,0 +1,77 @@
@@ -956,7 +967,7 @@ index 0000000..bc2f807
 +#include "user/user.h"
 +
 +#ifndef CHILD_SLEEP
-+#define CHILD_SLEEP 1
++#define CHILD_SLEEP 3
 +#endif
 +
 +#ifndef CONSOLE_SLEEP
