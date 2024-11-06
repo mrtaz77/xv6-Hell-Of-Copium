@@ -195,7 +195,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..3fb008b 100644
+index 58a8a0b..c68c3a7 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,9 @@
@@ -208,7 +208,7 @@ index 58a8a0b..3fb008b 100644
  
  struct cpu cpus[NCPU];
  
-@@ -26,6 +29,21 @@ extern char trampoline[]; // trampoline.S
+@@ -26,6 +29,24 @@ extern char trampoline[]; // trampoline.S
  // must be acquired before any p->lock.
  struct spinlock wait_lock;
  
@@ -227,10 +227,13 @@ index 58a8a0b..3fb008b 100644
 +static void increment_waiting_time_of_other_runnable_processes(int);
 +static void boost(struct proc *);
 +
++static int lottery_scheduler(struct cpu*);
++static void round_robin_scheduler(struct cpu*, int*);
++
  // Allocate a page for each process's kernel stack.
  // Map it high in memory, followed by an invalid
  // guard page.
-@@ -51,6 +69,8 @@ procinit(void)
+@@ -51,6 +72,8 @@ procinit(void)
    
    initlock(&pid_lock, "nextpid");
    initlock(&wait_lock, "wait_lock");
@@ -239,7 +242,7 @@ index 58a8a0b..3fb008b 100644
    for(p = proc; p < &proc[NPROC]; p++) {
        initlock(&p->lock, "proc");
        p->state = UNUSED;
-@@ -146,6 +166,12 @@ found:
+@@ -146,6 +169,12 @@ found:
    p->context.ra = (uint64)forkret;
    p->context.sp = p->kstack + PGSIZE;
  
@@ -252,7 +255,7 @@ index 58a8a0b..3fb008b 100644
    return p;
  }
  
-@@ -169,6 +195,10 @@ freeproc(struct proc *p)
+@@ -169,6 +198,10 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
@@ -263,7 +266,7 @@ index 58a8a0b..3fb008b 100644
  }
  
  // Create a user page table for a given process, with no user memory,
-@@ -312,6 +342,10 @@ fork(void)
+@@ -312,6 +345,10 @@ fork(void)
  
    pid = np->pid;
  
@@ -274,7 +277,11 @@ index 58a8a0b..3fb008b 100644
    release(&np->lock);
  
    acquire(&wait_lock);
-@@ -448,28 +482,110 @@ scheduler(void)
+@@ -444,32 +481,128 @@ wait(uint64 addr)
+ void
+ scheduler(void)
+ {
+-  struct proc *p;
    struct cpu *c = mycpu();
  
    c->proc = 0;
@@ -285,88 +292,50 @@ index 58a8a0b..3fb008b 100644
      // processes are waiting.
      intr_on();
  
-+    int lottery_tickets = 0;
-+    int p_in_q0 = 0;
++    if(!lottery_scheduler(c)) round_robin_scheduler(c, &round_robin_winner);
++  }
++}
++
++// lottery scheduler
++static int 
++lottery_scheduler(struct cpu *c)
++{
++  struct proc *p;
++  int lottery_tickets = 0;
++  int p_in_q0 = 0;
++  for(p = proc; p < &proc[NPROC]; p++) {
++    acquire(&p->lock);
++    if(p->level == TOP_Q && p->state == RUNNABLE) {
++      p_in_q0 = 1;
++      lottery_tickets += p->current_tickets;
++    }
++    release(&p->lock);
++  }
++
++  if(p_in_q0) {
++    if(lottery_tickets == 0) {
++      lottery_tickets = reinitialize_tickets();
++    }
++
++    int winning_ticket = randrange(lottery_tickets);
++    int ticket_count = 0;
++
      for(p = proc; p < &proc[NPROC]; p++) {
        acquire(&p->lock);
 -      if(p->state == RUNNABLE) {
 -        // Switch to chosen process.  It is the process's job
 -        // to release its lock and then reacquire it
 -        // before jumping back to us.
--        p->state = RUNNING;
--        c->proc = p;
--        swtch(&c->context, &p->context);
--
--        // Process is done running for now.
--        // It should have changed its p->state before coming back.
--        c->proc = 0;
 +      if(p->level == TOP_Q && p->state == RUNNABLE) {
-+        p_in_q0 = 1;
-+        lottery_tickets += p->current_tickets;
-       }
-       release(&p->lock);
-     }
-+
-+    if(p_in_q0) {
-+      if(lottery_tickets == 0) {
-+        lottery_tickets = reinitialize_tickets();
-+      }
-+
-+      int winning_ticket = randrange(lottery_tickets);
-+      int ticket_count = 0;
-+
-+      for(p = proc; p < &proc[NPROC]; p++) {
-+        acquire(&p->lock);
-+        if(p->level == TOP_Q && p->state == RUNNABLE) {
-+          ticket_count += p->current_tickets;
-+          if(ticket_count >= winning_ticket) {
-+            log_lottery_winner(p);
-+            // Switch to chosen process.  It is the process's job
-+            // to release its lock and then reacquire it
-+            // before jumping back to us.
-+            int initial_ticks = p->consumed_timer_ticks;
-+            p->running_time = p->waiting_time = 0;
-+            while(p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_0 && p->state == RUNNABLE) {
-+              p->state = RUNNING;
-+              c->proc = p;
-+              swtch(&c->context, &p->context);
-+              p->consumed_timer_ticks++;
-+              p->running_time++;
-+              log_process_ticks(p, p->consumed_timer_ticks - initial_ticks);
-+
-+              increment_q_ticks_in_proc_table(p->pid);
-+              increment_waiting_time_of_other_runnable_processes(p->pid);
-+
-+              if(p->state == RUNNABLE && p->consumed_timer_ticks - initial_ticks == TIME_LIMIT_0) {
-+                p->level = BOTTOM_Q;
-+                log_demotion(p, p->consumed_timer_ticks - initial_ticks);
-+              }
-+            }
-+            p->times_scheduled++;
-+            p->current_tickets--;
-+            // Process is done running for now.
-+            // It should have changed its p->state before coming back.
-+            c->proc = 0;
-+            release(&p->lock);
-+            break;
-+          }
-+        }
-+        release(&p->lock);
-+      }
-+    } else {
-+      for (int i = 0; i < NPROC; i++) {
-+        int idx = (round_robin_winner + 1 + i) % NPROC;
-+        p = &proc[idx];
-+        acquire(&p->lock);
-+        if(p->level == BOTTOM_Q && p->state == RUNNABLE) {
-+          log_round_robin_winner(p);
++        ticket_count += p->current_tickets;
++        if(ticket_count >= winning_ticket) {
++          log_lottery_winner(p);
 +          // Switch to chosen process.  It is the process's job
 +          // to release its lock and then reacquire it
 +          // before jumping back to us.
-+
 +          int initial_ticks = p->consumed_timer_ticks;
 +          p->running_time = p->waiting_time = 0;
-+          while(p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_1 && p->state == RUNNABLE) {
++          while(p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_0 && p->state == RUNNABLE) {
 +            p->state = RUNNING;
 +            c->proc = p;
 +            swtch(&c->context, &p->context);
@@ -377,26 +346,75 @@ index 58a8a0b..3fb008b 100644
 +            increment_q_ticks_in_proc_table(p->pid);
 +            increment_waiting_time_of_other_runnable_processes(p->pid);
 +
-+            if(p->state == SLEEPING && p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_1) {
-+              p->level = TOP_Q;
-+              log_promotion(p, p->consumed_timer_ticks - initial_ticks);
-+              break;
++            if(p->state == RUNNABLE && p->consumed_timer_ticks - initial_ticks == TIME_LIMIT_0) {
++              p->level = BOTTOM_Q;
++              log_demotion(p, p->consumed_timer_ticks - initial_ticks);
 +            }
 +          }
 +          p->times_scheduled++;
++          p->current_tickets--;
 +          // Process is done running for now.
 +          // It should have changed its p->state before coming back.
 +          c->proc = 0;
 +          release(&p->lock);
++          return 1;
++        }
++      }
++      release(&p->lock);
++    }
++  }
++  return 0;
++}
++
++// round-robin scheduler
++static void
++round_robin_scheduler(struct cpu *c, int* round_robin_winner) {
++  struct proc* p;
++  for (int i = 0; i < NPROC; i++) {
++    int idx = (*round_robin_winner + 1 + i) % NPROC;
++    p = &proc[idx];
++    acquire(&p->lock);
++    if(p->level == BOTTOM_Q && p->state == RUNNABLE) {
++      log_round_robin_winner(p);
++      *round_robin_winner = idx;
++      // Switch to chosen process.  It is the process's job
++      // to release its lock and then reacquire it
++      // before jumping back to us.
++
++      int initial_ticks = p->consumed_timer_ticks;
++      p->running_time = p->waiting_time = 0;
++      while(p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_1 && p->state == RUNNABLE) {
+         p->state = RUNNING;
+         c->proc = p;
+         swtch(&c->context, &p->context);
++        p->consumed_timer_ticks++;
++        p->running_time++;
++        log_process_ticks(p, p->consumed_timer_ticks - initial_ticks);
++
++        increment_q_ticks_in_proc_table(p->pid);
++        increment_waiting_time_of_other_runnable_processes(p->pid);
+ 
+-        // Process is done running for now.
+-        // It should have changed its p->state before coming back.
+-        c->proc = 0;
++        if(p->state == SLEEPING && p->consumed_timer_ticks - initial_ticks < TIME_LIMIT_1) {
++          p->level = TOP_Q;
++          log_promotion(p, p->consumed_timer_ticks - initial_ticks);
 +          break;
 +        }
-+        release(&p->lock);
-+      }
-+    }
+       }
++      p->times_scheduled++;
++      // Process is done running for now.
++      // It should have changed its p->state before coming back.
++      c->proc = 0;
+       release(&p->lock);
++      return;
+     }
++    release(&p->lock);
    }
  }
  
-@@ -686,3 +802,186 @@ procdump(void)
+@@ -686,3 +819,187 @@ procdump(void)
      printf("\n");
    }
  }
@@ -473,9 +491,10 @@ index 58a8a0b..3fb008b 100644
 +  struct proc* p;
 +  for(p = proc; p < &proc[NPROC]; p++) {
 +    if(p->pid == 0) continue;
-+    if(p->pid != pid) acquire(&p->lock);
++    int is_different_pid = p->pid != pid;
++    if(is_different_pid) acquire(&p->lock);
 +    p->queue_ticks[p->level]++;
-+    if(p->pid != pid) release(&p->lock);
++    if(is_different_pid) release(&p->lock);
 +  }
 +}
 +
@@ -583,7 +602,6 @@ index 58a8a0b..3fb008b 100644
 +  }
 +  release(&log_lock);
 +}
-\ No newline at end of file
 diff --git a/kernel/proc.h b/kernel/proc.h
 index d021857..89c6015 100644
 --- a/kernel/proc.h
@@ -930,15 +948,19 @@ index 0000000..6d0a66c
 \ No newline at end of file
 diff --git a/user/dummyproc.c b/user/dummyproc.c
 new file mode 100644
-index 0000000..7627a6f
+index 0000000..bc2f807
 --- /dev/null
 +++ b/user/dummyproc.c
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,77 @@
 +#include "kernel/types.h"
 +#include "user/user.h"
 +
 +#ifndef CHILD_SLEEP
-+#define CHILD_SLEEP 2
++#define CHILD_SLEEP 1
++#endif
++
++#ifndef CONSOLE_SLEEP
++#define CONSOLE_SLEEP 1
 +#endif
 +
 +#ifndef CHILD_COUNT
@@ -985,11 +1007,14 @@ index 0000000..7627a6f
 +      printf("Fork failed: %d\n", pid);
 +    if(pid > 0) {
 +      if(i) continue;
++      // sleep(CONSOLE_SLEEP);
 +      printf("PARENT: Parent with pid %d called with %d tickets, %u iters. Parent will exit now.\n", getpid(), tickets, iterations);
 +      for(uint32 i = 0; i < iterations; i++);
++      // sleep(CONSOLE_SLEEP);
 +      printf("PARENT: Parent with pid %d exited with status 0\n", getpid());
 +    }
 +    else {
++      // sleep(CONSOLE_SLEEP);
 +      printf("CHILD: process %d with %d tickets started for %u loops\n", getpid(), tickets, iterations);
 +      uint32 interval = iterations / tickets;
 +      for(uint32 i = 0; i < iterations; i++) {
@@ -998,6 +1023,7 @@ index 0000000..7627a6f
 +          printf("Inside Child: PID %d with %d tickets ran for %u loops\n", getpid(), tickets, i);
 +        }
 +      }
++      // sleep(CONSOLE_SLEEP);
 +      printf("CHILD: process %d with %d tickets ran for %u loops\n", getpid(), tickets, iterations);
 +      return;
 +    }
