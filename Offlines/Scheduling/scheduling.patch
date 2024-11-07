@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 62fd0f8..0341e01 100644
+index 62fd0f8..079e841 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -28,7 +28,8 @@ OBJS = \
@@ -35,15 +35,6 @@ index 62fd0f8..0341e01 100644
  
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
-@@ -160,7 +168,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
- 	then echo "-gdb tcp::$(GDBPORT)"; \
- 	else echo "-s -p $(GDBPORT)"; fi)
- ifndef CPUS
--CPUS := 3
-+CPUS := 1
- endif
- 
- QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
 index d1b6bb9..c1fdb40 100644
 --- a/kernel/defs.h
@@ -208,7 +199,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..1ffaef8 100644
+index 58a8a0b..660527a 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,9 @@
@@ -235,7 +226,7 @@ index 58a8a0b..1ffaef8 100644
 +static void log_promotion(struct proc*, int);
 +static void log_boost(struct proc*);
 +
-+static void increment_q_ticks_in_proc_table(int);
++static void increment_q_ticks_in_proc_table();
 +static int reinitialize_tickets(void);
 +static void increment_waiting_time_of_other_runnable_processes(int);
 +static void boost(struct proc *);
@@ -365,16 +356,16 @@ index 58a8a0b..1ffaef8 100644
 +
 +    acquire(&p->lock);
 +    if (p->level == BOTTOM_Q && p->state == RUNNABLE) {
-+        log_round_robin_winner(p);
-+        run_process(c, p, TIME_LIMIT_1, 1, 0);
-+        return;
++      log_round_robin_winner(p);
++      run_process(c, p, TIME_LIMIT_1, 1, 0);
++      return;
 +    }
 +    release(&p->lock);
 +  }
  }
  
  // Switch to scheduler.  Must hold only p->lock
-@@ -686,3 +770,237 @@ procdump(void)
+@@ -686,3 +770,244 @@ procdump(void)
      printf("\n");
    }
  }
@@ -446,15 +437,14 @@ index 58a8a0b..1ffaef8 100644
 +}
 +
 +static void
-+increment_q_ticks_in_proc_table(int pid)
++increment_q_ticks_in_proc_table()
 +{
 +  struct proc* p;
 +  for(p = proc; p < &proc[NPROC]; p++) {
 +    if(p->pid == 0) continue;
-+    int is_different_pid = p->pid != pid;
-+    if(is_different_pid) acquire(&p->lock);
++    acquire(&p->lock);
 +    p->queue_ticks[p->level]++;
-+    if(is_different_pid) release(&p->lock);
++    release(&p->lock);
 +  }
 +}
 +
@@ -502,7 +492,7 @@ index 58a8a0b..1ffaef8 100644
 +{
 +  acquire(&log_lock);
 +  if (LOG) {
-+    printf("%sLOTTERY: Process %d (%s) won in queue %d with %d tickets%s\n",
++    printf("\n%sLOTTERY: Process %d (%s) won in queue %d with %d tickets%s\n",
 +          HBLU, p->pid, p->name, p->level, p->current_tickets, COLOR_RESET);
 +  }
 +  release(&log_lock);
@@ -513,7 +503,7 @@ index 58a8a0b..1ffaef8 100644
 +{
 +  acquire(&log_lock);
 +  if (LOG) {
-+    printf("%sROUND-ROBIN: Process %d (%s) won in queue %d with %d tickets%s\n",
++    printf("\n%sROUND-ROBIN: Process %d (%s) won in queue %d with %d tickets%s\n",
 +          HMAG, p->pid, p->name, p->level, p->current_tickets, COLOR_RESET);
 +  }
 +  release(&log_lock);
@@ -524,7 +514,7 @@ index 58a8a0b..1ffaef8 100644
 +{
 +  acquire(&log_lock);
 +  if (LOG) {
-+    printf("\t%sProcess %d has spent %d ticks in queue %d%s\n",
++    printf("\n\t%sProcess %d has spent %d ticks in queue %d%s\n",
 +          HYEL, p->pid, consumed_ticks, p->level, COLOR_RESET);
 +  }
 +  release(&log_lock);
@@ -535,7 +525,7 @@ index 58a8a0b..1ffaef8 100644
 +{
 +  acquire(&log_lock);
 +  if (LOG) {
-+    printf("%sPROMO: Process %d (%s) ran for %d timer ticks, promoted to queue %d%s\n",
++    printf("\n%sPROMO: Process %d (%s) ran for %d timer ticks, promoted to queue %d%s\n",
 +            HGRN, p->pid, p->name, consumed_ticks, p->level, COLOR_RESET);
 +  }
 +  release(&log_lock);
@@ -546,7 +536,7 @@ index 58a8a0b..1ffaef8 100644
 +{
 +  acquire(&log_lock);
 +  if (LOG) {
-+    printf("%sDEMO: Process %d (%s) ran for %d timer ticks, demoted to queue %d%s\n",
++    printf("\n%sDEMO: Process %d (%s) ran for %d timer ticks, demoted to queue %d%s\n",
 +          HRED, p->pid, p->name, consumed_ticks, p->level, COLOR_RESET);
 +  }
 +  release(&log_lock);
@@ -557,7 +547,7 @@ index 58a8a0b..1ffaef8 100644
 +{
 +  acquire(&log_lock);
 +  if(LOG) {
-+    printf("%sBOOST: Process %d (%s) waited for %d ticks, promoted to queue %d%s\n",
++    printf("\n%sBOOST: Process %d (%s) waited for %d ticks, promoted to queue %d%s\n",
 +    HGRN, p->pid, p->name, p->waiting_time, p->level, COLOR_RESET);
 +  }
 +  release(&log_lock);
@@ -582,37 +572,44 @@ index 58a8a0b..1ffaef8 100644
 +
 +static int
 +run_process(struct cpu *c, struct proc *p, int time_limit, int promote_on_sleep, int demote_on_time) {
++
 +  int initial_ticks = p->consumed_timer_ticks;
 +  p->running_time = p->waiting_time = 0;
++
++  if(demote_on_time) p->current_tickets--;
++  p->times_scheduled++;
 +
 +  while (p->consumed_timer_ticks - initial_ticks < time_limit && p->state == RUNNABLE) {
 +    p->state = RUNNING;
 +    c->proc = p;
 +    swtch(&c->context, &p->context);
++    c->proc = 0;
++
 +    p->consumed_timer_ticks++;
 +    p->running_time++;
 +    log_process_ticks(p, p->consumed_timer_ticks - initial_ticks);
 +
-+    increment_q_ticks_in_proc_table(p->pid);
-+    increment_waiting_time_of_other_runnable_processes(p->pid);
-+
 +    if (promote_on_sleep && p->state == SLEEPING) {
 +      p->level = TOP_Q;
 +      log_promotion(p, p->consumed_timer_ticks - initial_ticks);
-+      break;
 +    }
 +    if (demote_on_time && p->state == RUNNABLE && p->consumed_timer_ticks - initial_ticks == time_limit) {
 +      p->level = BOTTOM_Q;
 +      log_demotion(p, p->consumed_timer_ticks - initial_ticks);
 +    }
++    release(&p->lock);
++
++    increment_q_ticks_in_proc_table();
++    increment_waiting_time_of_other_runnable_processes(p->pid);
++
++    acquire(&p->lock);
 +  }
 +
-+  p->times_scheduled++;
-+  c->proc = 0;
 +  release(&p->lock);
++  
 +  return 1;
 +}
-\ No newline at end of file
++
 diff --git a/kernel/proc.h b/kernel/proc.h
 index d021857..89c6015 100644
 --- a/kernel/proc.h
@@ -959,7 +956,7 @@ index 0000000..6d0a66c
 \ No newline at end of file
 diff --git a/user/dummyproc.c b/user/dummyproc.c
 new file mode 100644
-index 0000000..6d528e5
+index 0000000..1a53d2c
 --- /dev/null
 +++ b/user/dummyproc.c
 @@ -0,0 +1,77 @@
@@ -967,7 +964,7 @@ index 0000000..6d528e5
 +#include "user/user.h"
 +
 +#ifndef CHILD_SLEEP
-+#define CHILD_SLEEP 3
++#define CHILD_SLEEP 1
 +#endif
 +
 +#ifndef CONSOLE_SLEEP
@@ -975,7 +972,7 @@ index 0000000..6d528e5
 +#endif
 +
 +#ifndef CHILD_COUNT
-+#define CHILD_COUNT 4
++#define CHILD_COUNT 1
 +#endif
 +
 +static void run(int, uint32);
@@ -1019,23 +1016,23 @@ index 0000000..6d528e5
 +    if(pid > 0) {
 +      if(i) continue;
 +      // sleep(CONSOLE_SLEEP);
-+      printf("PARENT: Parent with pid %d called with %d tickets, %u iters. Parent will exit now.\n", getpid(), tickets, iterations);
++      printf("\nPARENT: Parent with pid %d called with %d tickets, %u iters. Parent will exit now.\n", getpid(), tickets, iterations);
 +      for(uint32 i = 0; i < iterations; i++);
 +      // sleep(CONSOLE_SLEEP);
-+      printf("PARENT: Parent with pid %d exited with status 0\n", getpid());
++      printf("\nPARENT: Parent with pid %d exited with status 0\n", getpid());
 +    }
 +    else {
 +      // sleep(CONSOLE_SLEEP);
-+      printf("CHILD: process %d with %d tickets started for %u loops\n", getpid(), tickets, iterations);
++      printf("\nCHILD: process %d with %d tickets started for %u loops\n", getpid(), tickets, iterations);
 +      uint32 interval = iterations / tickets;
 +      for(uint32 i = 0; i < iterations; i++) {
 +        if(!(i % interval)) {
 +          sleep(CHILD_SLEEP);
-+          printf("Inside Child: PID %d with %d tickets ran for %u loops\n", getpid(), tickets, i);
++          printf("\nInside Child: PID %d with %d tickets ran for %u loops\n", getpid(), tickets, i);
 +        }
 +      }
 +      // sleep(CONSOLE_SLEEP);
-+      printf("CHILD: process %d with %d tickets ran for %u loops\n", getpid(), tickets, iterations);
++      printf("\nCHILD: process %d with %d tickets ran for %u loops\n", getpid(), tickets, iterations);
 +      return;
 +    }
 +  }
