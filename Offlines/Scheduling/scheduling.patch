@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 62fd0f8..079e841 100644
+index 62fd0f8..2b6869d 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -28,7 +28,8 @@ OBJS = \
@@ -35,6 +35,15 @@ index 62fd0f8..079e841 100644
  
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
+@@ -160,7 +168,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
+ 	then echo "-gdb tcp::$(GDBPORT)"; \
+ 	else echo "-s -p $(GDBPORT)"; fi)
+ ifndef CPUS
+-CPUS := 3
++CPUS := 6
+ endif
+ 
+ QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
 index d1b6bb9..c1fdb40 100644
 --- a/kernel/defs.h
@@ -199,7 +208,7 @@ index 6624bff..23fd8ce 100644
 +#define WAIT_THRESH      6 // waiting threshold
 +#define DEFAULT_TICKETS 10 // initial ticket count for lottery scheduling
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..660527a 100644
+index 58a8a0b..4198616 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,9 @@
@@ -365,7 +374,7 @@ index 58a8a0b..660527a 100644
  }
  
  // Switch to scheduler.  Must hold only p->lock
-@@ -686,3 +770,244 @@ procdump(void)
+@@ -686,3 +770,245 @@ procdump(void)
      printf("\n");
    }
  }
@@ -492,8 +501,8 @@ index 58a8a0b..660527a 100644
 +{
 +  acquire(&log_lock);
 +  if (LOG) {
-+    printf("\n%sLOTTERY: Process %d (%s) won in queue %d with %d tickets%s\n",
-+          HBLU, p->pid, p->name, p->level, p->current_tickets, COLOR_RESET);
++    printf("\n%sLOTTERY: Process %d (%s) won in queue %d with %d tickets in cpu %d%s\n",
++          HBLU, p->pid, p->name, p->level, p->current_tickets, cpuid(), COLOR_RESET);
 +  }
 +  release(&log_lock);
 +}
@@ -503,8 +512,8 @@ index 58a8a0b..660527a 100644
 +{
 +  acquire(&log_lock);
 +  if (LOG) {
-+    printf("\n%sROUND-ROBIN: Process %d (%s) won in queue %d with %d tickets%s\n",
-+          HMAG, p->pid, p->name, p->level, p->current_tickets, COLOR_RESET);
++    printf("\n%sROUND-ROBIN: Process %d (%s) won in queue %d with %d tickets in cpu %d%s\n",
++          HMAG, p->pid, p->name, p->level, p->current_tickets, cpuid(), COLOR_RESET);
 +  }
 +  release(&log_lock);
 +}
@@ -514,8 +523,8 @@ index 58a8a0b..660527a 100644
 +{
 +  acquire(&log_lock);
 +  if (LOG) {
-+    printf("\n\t%sProcess %d has spent %d ticks in queue %d%s\n",
-+          HYEL, p->pid, consumed_ticks, p->level, COLOR_RESET);
++    printf("\n\t%sProcess %d has spent %d ticks in queue %d in cpu %d%s\n",
++          HYEL, p->pid, consumed_ticks, p->level, cpuid(), COLOR_RESET);
 +  }
 +  release(&log_lock);
 +}
@@ -525,8 +534,8 @@ index 58a8a0b..660527a 100644
 +{
 +  acquire(&log_lock);
 +  if (LOG) {
-+    printf("\n%sPROMO: Process %d (%s) ran for %d timer ticks, promoted to queue %d%s\n",
-+            HGRN, p->pid, p->name, consumed_ticks, p->level, COLOR_RESET);
++    printf("\n%sPROMO: Process %d (%s) ran for %d timer ticks, promoted to queue %d in cpu %d%s\n",
++            HGRN, p->pid, p->name, consumed_ticks, p->level, cpuid(), COLOR_RESET);
 +  }
 +  release(&log_lock);
 +}
@@ -536,8 +545,8 @@ index 58a8a0b..660527a 100644
 +{
 +  acquire(&log_lock);
 +  if (LOG) {
-+    printf("\n%sDEMO: Process %d (%s) ran for %d timer ticks, demoted to queue %d%s\n",
-+          HRED, p->pid, p->name, consumed_ticks, p->level, COLOR_RESET);
++    printf("\n%sDEMO: Process %d (%s) ran for %d timer ticks, demoted to queue %d in cpu %d%s\n",
++          HRED, p->pid, p->name, consumed_ticks, p->level, cpuid(), COLOR_RESET);
 +  }
 +  release(&log_lock);
 +}
@@ -547,8 +556,8 @@ index 58a8a0b..660527a 100644
 +{
 +  acquire(&log_lock);
 +  if(LOG) {
-+    printf("\n%sBOOST: Process %d (%s) waited for %d ticks, promoted to queue %d%s\n",
-+    HGRN, p->pid, p->name, p->waiting_time, p->level, COLOR_RESET);
++    printf("\n%sBOOST: Process %d (%s) waited for %d ticks, promoted to queue %d in cpu %d%s\n",
++    HGRN, p->pid, p->name, p->waiting_time, p->level, cpuid(), COLOR_RESET);
 +  }
 +  release(&log_lock);
 +}
@@ -587,15 +596,16 @@ index 58a8a0b..660527a 100644
 +
 +    p->consumed_timer_ticks++;
 +    p->running_time++;
-+    log_process_ticks(p, p->consumed_timer_ticks - initial_ticks);
++    int elapsed_ticks = p->consumed_timer_ticks - initial_ticks;
++    log_process_ticks(p, elapsed_ticks);
 +
 +    if (promote_on_sleep && p->state == SLEEPING) {
 +      p->level = TOP_Q;
-+      log_promotion(p, p->consumed_timer_ticks - initial_ticks);
++      log_promotion(p, elapsed_ticks);
 +    }
 +    if (demote_on_time && p->state == RUNNABLE && p->consumed_timer_ticks - initial_ticks == time_limit) {
 +      p->level = BOTTOM_Q;
-+      log_demotion(p, p->consumed_timer_ticks - initial_ticks);
++      log_demotion(p, elapsed_ticks);
 +    }
 +    release(&p->lock);
 +
@@ -956,24 +966,17 @@ index 0000000..6d0a66c
 \ No newline at end of file
 diff --git a/user/dummyproc.c b/user/dummyproc.c
 new file mode 100644
-index 0000000..1a53d2c
+index 0000000..2be25da
 --- /dev/null
 +++ b/user/dummyproc.c
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,70 @@
 +#include "kernel/types.h"
 +#include "user/user.h"
 +
-+#ifndef CHILD_SLEEP
++#define USER_LOG 0
 +#define CHILD_SLEEP 1
-+#endif
-+
-+#ifndef CONSOLE_SLEEP
 +#define CONSOLE_SLEEP 1
-+#endif
-+
-+#ifndef CHILD_COUNT
-+#define CHILD_COUNT 1
-+#endif
++#define CHILD_COUNT 3
 +
 +static void run(int, uint32);
 +
@@ -1016,23 +1019,23 @@ index 0000000..1a53d2c
 +    if(pid > 0) {
 +      if(i) continue;
 +      // sleep(CONSOLE_SLEEP);
-+      printf("\nPARENT: Parent with pid %d called with %d tickets, %u iters. Parent will exit now.\n", getpid(), tickets, iterations);
++      if(USER_LOG)printf("\nPARENT: Parent with pid %d called with %d tickets, %u iters. Parent will exit now.\n", getpid(), tickets, iterations);
 +      for(uint32 i = 0; i < iterations; i++);
 +      // sleep(CONSOLE_SLEEP);
-+      printf("\nPARENT: Parent with pid %d exited with status 0\n", getpid());
++      if(USER_LOG)printf("\nPARENT: Parent with pid %d exited with status 0\n", getpid());
 +    }
 +    else {
 +      // sleep(CONSOLE_SLEEP);
-+      printf("\nCHILD: process %d with %d tickets started for %u loops\n", getpid(), tickets, iterations);
++      if(USER_LOG)printf("\nCHILD: process %d with %d tickets started for %u loops\n", getpid(), tickets, iterations);
 +      uint32 interval = iterations / tickets;
 +      for(uint32 i = 0; i < iterations; i++) {
 +        if(!(i % interval)) {
 +          sleep(CHILD_SLEEP);
-+          printf("\nInside Child: PID %d with %d tickets ran for %u loops\n", getpid(), tickets, i);
++          if(USER_LOG)printf("\nInside Child: PID %d with %d tickets ran for %u loops\n", getpid(), tickets, i);
 +        }
 +      }
 +      // sleep(CONSOLE_SLEEP);
-+      printf("\nCHILD: process %d with %d tickets ran for %u loops\n", getpid(), tickets, iterations);
++      if(USER_LOG)printf("\nCHILD: process %d with %d tickets ran for %u loops\n", getpid(), tickets, iterations);
 +      return;
 +    }
 +  }
@@ -1115,10 +1118,10 @@ index 0000000..7c0b613
 \ No newline at end of file
 diff --git a/user/testprocinfo.c b/user/testprocinfo.c
 new file mode 100644
-index 0000000..a79a914
+index 0000000..d86b285
 --- /dev/null
 +++ b/user/testprocinfo.c
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,69 @@
 +#include "kernel/types.h"
 +#include "kernel/pstat.h"
 +#include "user/user.h"
@@ -1131,13 +1134,9 @@ index 0000000..a79a914
 +#define SPACES_SCHED 18
 +#define SPACES_TICK_ORIG 17
 +#define SPACES_TICK_CURR 16
-+#define SPACES_QUEUE_TICK 3
++#define SPACES_QUEUE_TICK 5
 +
-+// Macro for printing a value with padding
-+#define PRINT_FIELD(value, spaces)      \
-+  printf("%d", value);                  \
-+  for (int _ = 0; _ < (spaces - get_digit_count(value)); _++) \
-+    printf(" ");
++void print_field(int, int);
 +
 +int
 +main(int argc, char *argv[])
@@ -1153,35 +1152,44 @@ index 0000000..a79a914
 +    printf("Failed to get proc info.\n");
 +    exit(1);
 +  } else {
-+    printf("PID   | In Use | In Q | Waiting Time | Running Time | # Times Scheduled | Original Tickets | Current Tickets | q0 | q1\n");
-+    printf("----------------------------------------------------------------------------------------------------------------------\n");
++    printf("PID   | In Use | In Q | Waiting Time | Running Time | # Times Scheduled | Original Tickets | Current Tickets |  q0  |  q1  |\n");
++    printf("----------------------------------------------------------------------------------------------------------------------------\n");
 +
 +    for (int i = 0; i < NPROC; i++) {
 +      if(!user_pstat->pid[i]) continue;
-+      PRINT_FIELD(user_pstat->pid[i], SPACES_PID);
++      print_field(user_pstat->pid[i], SPACES_PID);
 +      printf("| ");
-+      PRINT_FIELD(user_pstat->inuse[i], SPACES_USE);
++      print_field(user_pstat->inuse[i], SPACES_USE);
 +      printf("| ");
-+      PRINT_FIELD(user_pstat->inQ[i], SPACES_INQ);
++      print_field(user_pstat->inQ[i], SPACES_INQ);
 +      printf("| ");
-+      PRINT_FIELD(user_pstat->waiting_time[i], SPACES_WAIT);
++      print_field(user_pstat->waiting_time[i], SPACES_WAIT);
 +      printf("| ");
-+      PRINT_FIELD(user_pstat->running_time[i], SPACES_RUN);
++      print_field(user_pstat->running_time[i], SPACES_RUN);
 +      printf("| ");
-+      PRINT_FIELD(user_pstat->times_scheduled[i], SPACES_SCHED);
++      print_field(user_pstat->times_scheduled[i], SPACES_SCHED);
 +      printf("| ");
-+      PRINT_FIELD(user_pstat->tickets_original[i], SPACES_TICK_ORIG);
++      print_field(user_pstat->tickets_original[i], SPACES_TICK_ORIG);
 +      printf("| ");
-+      PRINT_FIELD(user_pstat->tickets_current[i], SPACES_TICK_CURR);
++      print_field(user_pstat->tickets_current[i], SPACES_TICK_CURR);
 +      printf("| ");
-+      PRINT_FIELD(user_pstat->queue_ticks[i][0], SPACES_QUEUE_TICK);
++      print_field(user_pstat->queue_ticks[i][0], SPACES_QUEUE_TICK);
 +      printf("| ");
-+      PRINT_FIELD(user_pstat->queue_ticks[i][1], SPACES_QUEUE_TICK);
++      print_field(user_pstat->queue_ticks[i][1], SPACES_QUEUE_TICK);
 +      printf("\n");
 +    }
 +  }
 +  free(user_pstat);
 +  exit(0);
++}
++
++void print_field(int value, int spaces) {
++  int value_len = get_digit_count(value);
++  int left_pad = (spaces - value_len) / 2;
++  int right_pad = spaces - value_len - left_pad;
++  for (int i = 0; i < left_pad; i++) printf(" ");
++  printf("%d", value);
++  for (int i = 0; i < right_pad; i++) printf(" ");
 +}
 \ No newline at end of file
 diff --git a/user/togglelog.c b/user/togglelog.c
