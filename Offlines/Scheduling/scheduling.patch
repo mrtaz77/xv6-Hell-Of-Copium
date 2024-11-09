@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 62fd0f8..2b6869d 100644
+index 62fd0f8..0341e01 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -28,7 +28,8 @@ OBJS = \
@@ -40,7 +40,7 @@ index 62fd0f8..2b6869d 100644
  	else echo "-s -p $(GDBPORT)"; fi)
  ifndef CPUS
 -CPUS := 3
-+CPUS := 6
++CPUS := 1
  endif
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
@@ -966,15 +966,15 @@ index 0000000..6d0a66c
 \ No newline at end of file
 diff --git a/user/dummyproc.c b/user/dummyproc.c
 new file mode 100644
-index 0000000..2be25da
+index 0000000..8954f72
 --- /dev/null
 +++ b/user/dummyproc.c
 @@ -0,0 +1,70 @@
 +#include "kernel/types.h"
 +#include "user/user.h"
 +
-+#define USER_LOG 0
-+#define CHILD_SLEEP 1
++#define USER_LOG 1
++#define CHILD_SLEEP 2
 +#define CONSOLE_SLEEP 1
 +#define CHILD_COUNT 3
 +
