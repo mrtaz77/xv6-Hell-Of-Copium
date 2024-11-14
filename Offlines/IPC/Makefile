@@ -9,7 +9,8 @@ EXEC = main
 
 # List of all C source files
 C_SOURCES = main.c \
-util/Id_generator.c 
+util/Id_generator.c \
+util/util.c
 
 # Object files derived from C sources
 OBJS = $(C_SOURCES:.c=.o)
