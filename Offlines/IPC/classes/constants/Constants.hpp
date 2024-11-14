@@ -10,9 +10,13 @@
 #define PREMIUM_TICKET_START_ID 2001
 #define PREMIUM_TICKET_END_ID 2100
 
+// Lambda value for Poisson distribution
 #define LAMDA 10000.234
 
-#define MAX_ARRIVAL_DELAY 30
+// Delay before arrival at A
+#define MAX_ARRIVAL_DELAY 14
+
+// Delay between steps
+#define MAX_STEP_DELAY 2
 
 #endif // _CONSTANTS_HPP_
-

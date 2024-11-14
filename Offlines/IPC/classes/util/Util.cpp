@@ -3,6 +3,7 @@
 unsigned int N, M, w, x, y, z, total_visitors;
 Visitor* visitors;
 pthread_mutex_t output_lock;
+pthread_mutex_t step_locks[NUMBER_OF_STEPS];
 auto start_time = chrono::high_resolution_clock::now();
 
 void input_params() {
@@ -25,6 +26,7 @@ void open_museum() {
     for(unsigned int i = N; i < N + M; i++) 
         visitors[i] = Visitor(generator->get_ticket_id(TicketTier::PREMIUM), TicketTier::PREMIUM, rand_range(1, MAX_ARRIVAL_DELAY), Status::ARRIVAL_A);
     init_output_lock();
+    init_step_locks();
     init_clock();
     int remaining_visitors = total_visitors;
     bool arrived[total_visitors] = {false};
@@ -42,7 +44,22 @@ void open_museum() {
 
 void* visit(void* arg) {
     Visitor* visitor = (Visitor*)arg;
-    sleep(get_time() + visitor->get_arrival_delay());
+    sleep(visitor->get_arrival_delay());
+    log(visitor->get_status(get_time()));
+    sleep(w);
+    visitor->set_status(Status::ARRIVAL_B);
+    log(visitor->get_status(get_time()));
+    visitor->set_status(Status::STEPS);
+    
+    for(int step = 0; step < NUMBER_OF_STEPS; step++) {
+        if(!step) pthread_mutex_lock(&step_locks[step]);
+        sleep(MAX_STEP_DELAY);
+        log(visitor->get_status(get_time(), step + 1));
+        if(step != NUMBER_OF_STEPS - 1) pthread_mutex_lock(&step_locks[step + 1]);
+        pthread_mutex_unlock(&step_locks[step]);
+    }
+
+    visitor->set_status(Status::C_GALLERY_1_ENTRANCE);
     log(visitor->get_status(get_time()));
     return NULL;
 }
@@ -66,4 +83,9 @@ void log(const string& message) {
     pthread_mutex_lock(&output_lock);
     cout << message << endl;
     pthread_mutex_unlock(&output_lock);
+}
+
+void init_step_locks() {
+    for(unsigned int i = 0; i < NUMBER_OF_STEPS; i++)
+        pthread_mutex_init(&step_locks[i], NULL);
 }

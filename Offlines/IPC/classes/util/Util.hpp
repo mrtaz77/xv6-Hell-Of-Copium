@@ -22,5 +22,6 @@ void init_output_lock();
 void init_clock();
 long long get_time();
 void log(const string&);
+void init_step_locks();
 
 #endif // _UTIL_HPP_
