@@ -8,9 +8,26 @@ sem_t gallery_1;
 sem_t glass_corridor;
 auto start_time = chrono::high_resolution_clock::now();
 
-unsigned int reader_counter = 0, writer_counter = 0;
-pthread_mutex_t reader_counter_lock, writer_counter_lock;
-pthread_mutex_t priority_lock, exclusive_access_lock;
+// Reader-Writer Problem
+// Writer's Preference
+// Reader : Standard Ticket Holder
+// Writer : Premium Ticket Holder
+
+// Priority Lock: to block standard ticket holders 
+// when a premium ticket holder is present
+pthread_mutex_t priority_lock;
+
+// Exclusive Access Lock: to block incoming premium ticket holders
+// when a premium ticket holder or one or more standard ticket holders is present
+pthread_mutex_t exclusive_access_lock;
+
+// Standard Ticket Counter Lock: to update the number of standard ticket holders
+pthread_mutex_t standard_ticket_counter_lock;
+unsigned int standard_ticket_counter = 0;
+
+// Premium Ticket Counter Lock: to update the number of premium ticket holders
+pthread_mutex_t premium_ticket_counter_lock;
+unsigned int premium_ticket_counter = 0;
 
 void input_params() {
     cin >> N >> M;
@@ -98,10 +115,11 @@ void* visit(void* arg) {
 
     // ticket tier check
     if(visitor->get_ticket_tier() == TicketTier::PREMIUM)
-        writer(visitor);
+        premium_ticket_holder(visitor);
     else
-        reader(visitor);
+        standard_ticket_holder(visitor);
     
+    // exit
     visitor->set_status(Status::EXIT_F);
     log(visitor->get_status(get_time()));
 
@@ -165,16 +183,16 @@ void init_visitors() {
         visitors[i] = Visitor(generator->get_ticket_id(TicketTier::PREMIUM), TicketTier::PREMIUM, rand_range(1, MAX_ARRIVAL_DELAY), Status::ARRIVAL_A);
 }
 
-void reader(Visitor* visitor) {
+void standard_ticket_holder(Visitor* visitor) {
     // similar to synch
     // use before for that thread which has lower priority
     pthread_mutex_lock(&priority_lock);
     
-    pthread_mutex_lock(&reader_counter_lock);
-    reader_counter++;
-    if(reader_counter == 1)
-        pthread_mutex_lock(&exclusive_access_lock); // block incoming writers but not readers
-    pthread_mutex_unlock(&reader_counter_lock);
+    pthread_mutex_lock(&standard_ticket_counter_lock);
+    standard_ticket_counter++;
+    if(standard_ticket_counter == 1)
+        pthread_mutex_lock(&exclusive_access_lock); // block incoming premium ticket holders but not standard ticket holders
+    pthread_mutex_unlock(&standard_ticket_counter_lock);
 
     pthread_mutex_unlock(&priority_lock); // can access now
 
@@ -185,23 +203,23 @@ void reader(Visitor* visitor) {
     // time in photo booth
     sleep(z);
 
-    pthread_mutex_lock(&reader_counter_lock);
-    reader_counter--;
-    if(reader_counter == 0)
-        pthread_mutex_unlock(&exclusive_access_lock); // unblock incoming writers
-    pthread_mutex_unlock(&reader_counter_lock);
+    pthread_mutex_lock(&standard_ticket_counter_lock);
+    standard_ticket_counter--;
+    if(standard_ticket_counter == 0)
+        pthread_mutex_unlock(&exclusive_access_lock); // unblock incoming premium ticket holders
+    pthread_mutex_unlock(&standard_ticket_counter_lock);
 }
 
-void writer(Visitor* visitor) {
-    pthread_mutex_lock(&writer_counter_lock);
-    writer_counter++;
-    if(writer_counter == 1)
-        pthread_mutex_lock(&priority_lock); // block incoming readers
-    pthread_mutex_unlock(&writer_counter_lock);
+void premium_ticket_holder(Visitor* visitor) {
+    pthread_mutex_lock(&premium_ticket_counter_lock);
+    premium_ticket_counter++;
+    if(premium_ticket_counter == 1)
+        pthread_mutex_lock(&priority_lock); // block incoming standard ticket holders
+    pthread_mutex_unlock(&premium_ticket_counter_lock);
 
     // similar to synch
     // use after for that thread which has higher priority
-    pthread_mutex_lock(&exclusive_access_lock); // block incoming writers
+    pthread_mutex_lock(&exclusive_access_lock); // block incoming premium ticket holders
 
     // inside photo booth
     visitor->set_status(Status::INSIDE_PHOTO_BOOTH);
@@ -210,18 +228,18 @@ void writer(Visitor* visitor) {
     // time in photo booth
     sleep(z);
 
-    pthread_mutex_unlock(&exclusive_access_lock); // unblock incoming writers
+    pthread_mutex_unlock(&exclusive_access_lock); // unblock incoming premium ticket holders
 
-    pthread_mutex_lock(&writer_counter_lock);
-    writer_counter--;
-    if(writer_counter == 0)
-        pthread_mutex_unlock(&priority_lock); // unblock incoming readers
-    pthread_mutex_unlock(&writer_counter_lock);
+    pthread_mutex_lock(&premium_ticket_counter_lock);
+    premium_ticket_counter--;
+    if(premium_ticket_counter == 0)
+        pthread_mutex_unlock(&priority_lock); // unblock incoming standard ticket holders
+    pthread_mutex_unlock(&premium_ticket_counter_lock);
 }
 
 void init_photo_booth_locks() {
-    pthread_mutex_init(&reader_counter_lock, NULL);
-    pthread_mutex_init(&writer_counter_lock, NULL);
+    pthread_mutex_init(&standard_ticket_counter_lock, NULL);
+    pthread_mutex_init(&premium_ticket_counter_lock, NULL);
     pthread_mutex_init(&priority_lock, NULL);
     pthread_mutex_init(&exclusive_access_lock, NULL);
 }
