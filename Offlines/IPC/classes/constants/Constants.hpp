@@ -12,5 +12,7 @@
 
 #define LAMDA 10000.234
 
+#define MAX_ARRIVAL_DELAY 30
+
 #endif // _CONSTANTS_HPP_
 

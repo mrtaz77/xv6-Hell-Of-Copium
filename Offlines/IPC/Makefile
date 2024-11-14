@@ -10,6 +10,8 @@ EXEC = main
 CPP_SOURCES = main.cpp \
 classes/random-number-generator/PoissonRandom.cpp \
 classes/ticket-generator/TicketGenerator.cpp \
+classes/util/Util.cpp \
+classes/visitor/Visitor.cpp
 
 CPP_OBJS = $(CPP_SOURCES:.cpp=.o)
 OBJS = $(CPP_OBJS)
