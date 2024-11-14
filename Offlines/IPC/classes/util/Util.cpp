@@ -55,7 +55,6 @@ void open_museum() {
     }
     for(unsigned int i = 0; i < total_visitors; i++)
         pthread_join(visitor_threads[i], NULL);
-    pthread_exit(NULL);
 }
 
 void* visit(void* arg) {
@@ -123,7 +122,6 @@ void* visit(void* arg) {
     visitor->set_status(Status::EXIT_F);
     log(visitor->get_status(get_time()));
 
-    pthread_exit(NULL);
     return NULL;
 }
 
