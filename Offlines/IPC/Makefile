@@ -1,54 +1,42 @@
 # This Makefile is designed for separate compilation.
 # It requires GNU Make.
 
-# Compiler settings
-CC = gcc
 CXX = g++
-CFLAGS = -Wall -Wextra -MMD
-CXXFLAGS = -Wall -Wextra -MMD
-OPTFLAGS = -O2
+CXXFLAGS = -Wall -Wextra -O2 -MMD
 
 EXEC = main
 
-# List of all C source files
-C_SOURCES = main.c \
-util/Id_generator.c
+# List of all source files
+CPP_SOURCES = main.cpp \
+util/PoissonRandom.cpp \
+util/TicketGenerator.cpp \
 
-# List of all C++ source files
-CXX_SOURCES = util/PoissonRandom.cpp
+CPP_OBJS = $(CPP_SOURCES:.cpp=.o)
+OBJS = $(CPP_OBJS)
 
-# Object files derived from C and C++ sources
-C_OBJS = $(C_SOURCES:.c=.o)
-CXX_OBJS = $(CXX_SOURCES:.cpp=.o)
+OBJS_WIN = $(subst /,\,$(OBJS))
 
-# All object files
-OBJS = $(C_OBJS) $(CXX_OBJS)
+DEPS = $(CPP_SOURCES:.cpp=.d)
 
 .PHONY: all run clean
 
-# The default target (build the executable)
 all: $(EXEC)
 
-# Link the executable from object files
 $(EXEC): $(OBJS)
-	$(CXX) $(CXXFLAGS) $(OPTFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^
 
-# Compile C source files to object files
-%.o: %.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Compile C++ source files to object files
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-# Clean up generated files
 clean:
 ifeq ($(OS),Windows_NT)
-	del /Q $(EXEC).exe $(C_OBJS) $(CXX_OBJS)
-else
-	rm -f $(EXEC) $(C_OBJS) $(CXX_OBJS)
+	del /Q $(subst /,\,$(EXEC).exe) $(OBJS_WIN) $(DEPS)
+else 
+	rm -f $(EXEC) $(OBJS) $(DEPS)
 endif
 
-# Run the executable
 run: $(EXEC)
 	./$(EXEC)
+
+# Include dependency files
+-include $(DEPS) 

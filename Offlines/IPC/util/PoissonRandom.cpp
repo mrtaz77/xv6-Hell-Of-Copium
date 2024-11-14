@@ -14,19 +14,17 @@
 	is called, based on the specified Poisson distribution.
 */
 
-#include <random>
-#include "Constants.h"
+#include "PoissonRandom.hpp"
 
-using namespace std;
 
 static random_device rd;
 static mt19937 generator(rd());
 
-extern "C" int rand() {
+int rand() {
 	poisson_distribution<int> pd(LAMDA);
 	return pd(generator);
 }
 
-extern "C" int rand_range(int min, int max) {
+int rand_range(int min, int max) {
 	return min + rand() % (max - min + 1);
 }
