@@ -8,8 +8,8 @@ EXEC = main
 
 # List of all source files
 CPP_SOURCES = main.cpp \
-util/PoissonRandom.cpp \
-util/TicketGenerator.cpp \
+classes/random-number-generator/PoissonRandom.cpp \
+classes/ticket-generator/TicketGenerator.cpp \
 
 CPP_OBJS = $(CPP_SOURCES:.cpp=.o)
 OBJS = $(CPP_OBJS)

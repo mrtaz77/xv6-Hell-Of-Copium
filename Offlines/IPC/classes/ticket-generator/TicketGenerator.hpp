@@ -1,7 +1,7 @@
 #ifndef _ID_GENERATOR_HPP_
 #define _ID_GENERATOR_HPP_
 
-#include "Constants.hpp"
+#include "../constants/Constants.hpp"
 
 enum TicketTier {
     INVALID,

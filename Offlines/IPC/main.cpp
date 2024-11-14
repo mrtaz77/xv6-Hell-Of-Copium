@@ -1,7 +1,7 @@
 #include <iostream>
 
-#include "util/PoissonRandom.hpp"
-#include "util/TicketGenerator.hpp"
+#include "classes/random-number-generator/PoissonRandom.hpp"
+#include "classes/ticket-generator/TicketGenerator.hpp"
 
 using namespace std;
 
