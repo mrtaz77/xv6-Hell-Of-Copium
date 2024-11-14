@@ -1,7 +1,8 @@
 #include <stdio.h>
-#include "util/IdGenerator.h"
-#include "util/Util.h"
+#include "util/PoissonRandom.h"
 
 int main() {
-    input_params();
+    for (int i = 0; i < 10; i++) {
+        printf("Random number: %d\n", rand());
+    }
 }
