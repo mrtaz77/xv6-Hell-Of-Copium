@@ -7,6 +7,6 @@ Codes and assignments related to xv6 from OS course. Made with Copium.
 - [Submission](/Offlines/SystemCall/system_call.patch)
 
 ## Offline 2
-- `lottery`|`round robin`
+- `lottery`|`round robin`|`multiple cpu`
 - [Spec](/Specs/Offline%203-scheduling.pdf)
 - [Submission](/Offlines/Scheduling/scheduling.patch)
