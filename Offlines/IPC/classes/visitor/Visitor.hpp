@@ -34,6 +34,7 @@ public:
     unsigned int get_arrival_delay() const;
     void set_status(Status);
     string get_status(long long timestamp, unsigned int step = -1) const;
+    TicketTier get_ticket_tier() const;
 };
 
 

@@ -54,3 +54,7 @@ string Visitor::get_status(long long timestamp, unsigned int step) const {
 void Visitor::set_status(Status status) {
     this->status = status;
 }
+
+TicketTier Visitor::get_ticket_tier() const {
+    return ticket_tier;
+}

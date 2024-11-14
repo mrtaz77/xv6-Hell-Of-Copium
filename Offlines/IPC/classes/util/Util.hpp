@@ -29,5 +29,8 @@ void init_glass_corridor_semaphore();
 bool is_valid_params(int, int, int, int, int, int);
 void init_sync_objects();
 void init_visitors();
+void reader(Visitor*);
+void writer(Visitor*);
+void init_photo_booth_locks();
 
 #endif // _UTIL_HPP_
