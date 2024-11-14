@@ -1,5 +1,5 @@
-#ifndef _ID_GENERATOR_HPP_
-#define _ID_GENERATOR_HPP_
+#ifndef _TICKET_GENERATOR_HPP_
+#define _TICKET_GENERATOR_HPP_
 
 #include "../constants/Constants.hpp"
 
@@ -22,4 +22,4 @@ public:
     static void destroy_instance();
 };
 
-#endif // _ID_GENERATOR_HPP_
+#endif // _TICKET_GENERATOR_HPP_
