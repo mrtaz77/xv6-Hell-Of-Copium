@@ -20,18 +20,8 @@ void output_params() {
 }
 
 void open_museum() {
-    if(N <= 0 && M <= 0) exit(0);
-    visitors = new Visitor[N + M];
-    TicketGenerator* generator = TicketGenerator::get_instance();
-    for(unsigned int i = 0; i < N; i++) 
-        visitors[i] = Visitor(generator->get_ticket_id(TicketTier::STANDARD), TicketTier::STANDARD, rand_range(1, MAX_ARRIVAL_DELAY), Status::ARRIVAL_A);
-    for(unsigned int i = N; i < N + M; i++) 
-        visitors[i] = Visitor(generator->get_ticket_id(TicketTier::PREMIUM), TicketTier::PREMIUM, rand_range(1, MAX_ARRIVAL_DELAY), Status::ARRIVAL_A);
-    init_output_lock();
-    init_step_locks();
-    init_gallery_semaphore();
-    init_glass_corridor_semaphore();
-    init_clock();
+    init_visitors();
+    init_sync_objects();
     int remaining_visitors = total_visitors;
     bool arrived[total_visitors] = {false};
     pthread_t visitor_threads[total_visitors];
@@ -49,11 +39,17 @@ void open_museum() {
 
 void* visit(void* arg) {
     Visitor* visitor = (Visitor*)arg;
+    
     sleep(visitor->get_arrival_delay());
     log(visitor->get_status(get_time()));
+    
+    // time in hallway AB
     sleep(w);
+
     visitor->set_status(Status::ARRIVAL_B);
     log(visitor->get_status(get_time()));
+
+    // steps
     visitor->set_status(Status::STEPS);
     int step;
     for(step = 0; step < NUMBER_OF_STEPS; step++) {
@@ -65,19 +61,34 @@ void* visit(void* arg) {
             pthread_mutex_unlock(&step_locks[step]);
         }    
     }
+    
     sem_wait(&gallery_1);
     pthread_mutex_unlock(&step_locks[step - 1]);
+    
+    // gallery 1
     visitor->set_status(Status::C_GALLERY_1_ENTRANCE);
     log(visitor->get_status(get_time()));
+
+    // time in gallery 1
     sleep(x);
+    
+    // glass corridor
     sem_wait(&glass_corridor);
     sem_post(&gallery_1);
     visitor->set_status(Status::D_GALLERY_1_EXIT);
     log(visitor->get_status(get_time()));
+
+    // time in glass corridor
     sleep(rand_range(1, MAX_GLASS_CORRIDOR_DELAY));
     sem_post(&glass_corridor);
+
+    // gallery 2
     visitor->set_status(Status::E_GALLERY_2_ENTRANCE);
     log(visitor->get_status(get_time()));
+
+    // time in gallery 2
+    sleep(y);
+
     pthread_exit(NULL);
     return NULL;
 }
@@ -114,4 +125,25 @@ void init_gallery_semaphore() {
 
 void init_glass_corridor_semaphore() {
     sem_init(&glass_corridor, 0, GLASS_CORRIDOR_MAX_OCCUPANCY);
+}
+
+bool is_valid_params(int N, int M, int w, int x, int y, int z) {
+    return N >= 0 && M >= 0 && w >= 0 && x >= 0 && y >= 0 && z >= 0;
+}
+
+void init_sync_objects() {
+    init_output_lock();
+    init_step_locks();
+    init_gallery_semaphore();
+    init_glass_corridor_semaphore();
+    init_clock();
+}
+
+void init_visitors() {
+    visitors = new Visitor[N + M];
+    TicketGenerator* generator = TicketGenerator::get_instance();
+    for (unsigned int i = 0; i < N; i++)
+        visitors[i] = Visitor(generator->get_ticket_id(TicketTier::STANDARD), TicketTier::STANDARD, rand_range(1, MAX_ARRIVAL_DELAY), Status::ARRIVAL_A);
+    for (unsigned int i = N; i < total_visitors; i++)
+        visitors[i] = Visitor(generator->get_ticket_id(TicketTier::PREMIUM), TicketTier::PREMIUM, rand_range(1, MAX_ARRIVAL_DELAY), Status::ARRIVAL_A);
 }
