@@ -1,4 +1,4 @@
-#include "Id_generator.h"
+#include "IdGenerator.h"
 
 static Id_Generator* instance = NULL;
 
