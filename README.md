@@ -10,3 +10,7 @@ Codes and assignments related to xv6 from OS course. Made with Copium.
 - `lottery`|`round robin`|`multiple cpu`
 - [Spec](/Specs/Offline%203-scheduling.pdf)
 - [Submission](/Offlines/Scheduling/scheduling.patch)
+
+## Offline 3
+- `Inter Process Communication`
+- [Spec](/Specs/IPC%20Offline%20Specification-v.2.pdf)
