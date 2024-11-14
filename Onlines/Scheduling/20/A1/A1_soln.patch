@@ -1,0 +1,377 @@
+diff --git a/Makefile b/Makefile
+index 62fd0f8..338f2f7 100644
+--- a/Makefile
++++ b/Makefile
+@@ -56,7 +56,7 @@ LD = $(TOOLPREFIX)ld
+ OBJCOPY = $(TOOLPREFIX)objcopy
+ OBJDUMP = $(TOOLPREFIX)objdump
+ 
+-CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb -gdwarf-2
++CFLAGS = -Wall -Werror -Og -fno-omit-frame-pointer -ggdb -gdwarf-2 -g3
+ CFLAGS += -MD
+ CFLAGS += -mcmodel=medany
+ # CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
+@@ -139,6 +139,9 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
++	$U/_clear\
++	$U/_quit\
++	$U/_testloop
+ 
+ fs.img: mkfs/mkfs README $(UPROGS)
+ 	mkfs/mkfs fs.img README $(UPROGS)
+@@ -160,7 +163,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
+ 	then echo "-gdb tcp::$(GDBPORT)"; \
+ 	else echo "-s -p $(GDBPORT)"; fi)
+ ifndef CPUS
+-CPUS := 3
++CPUS := 1
+ endif
+ 
+ QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
+diff --git a/kernel/defs.h b/kernel/defs.h
+index d1b6bb9..1d1f2ab 100644
+--- a/kernel/defs.h
++++ b/kernel/defs.h
+@@ -9,6 +9,9 @@ struct sleeplock;
+ struct stat;
+ struct superblock;
+ 
++// start.c
++void            timerstop(void);
++
+ // bio.c
+ void            binit(void);
+ struct buf*     bread(uint, uint);
+@@ -106,6 +109,7 @@ void            yield(void);
+ int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
+ int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
+ void            procdump(void);
++int             setlength(int);
+ 
+ // swtch.S
+ void            swtch(struct context*, struct context*);
+diff --git a/kernel/kernelvec.S b/kernel/kernelvec.S
+index a18ecbb..23501c4 100644
+--- a/kernel/kernelvec.S
++++ b/kernel/kernelvec.S
+@@ -73,12 +73,17 @@ timervec:
+         # scratch[0,8,16] : register save area.
+         # scratch[24] : address of CLINT's MTIMECMP register.
+         # scratch[32] : desired interval between interrupts.
+-        
++        # scratch[40] : stop flag set by timerstop.
++
+         csrrw a0, mscratch, a0
+         sd a1, 0(a0)
+         sd a2, 8(a0)
+         sd a3, 16(a0)
+ 
++        # stop if timerstop has set stop flag
++        ld a1, 40(a0)
++        bne a1, zero, halt
++
+         # schedule the next timer interrupt
+         # by adding interval to mtimecmp.
+         ld a1, 24(a0) # CLINT_MTIMECMP(hart)
+@@ -98,3 +103,13 @@ timervec:
+         csrrw a0, mscratch, a0
+ 
+         mret
++
++halt:
++        # qemu stops if FINISHER_PASS=0x5555
++        # is written at address *VIRT_TEST(=0x100000L)
++        lui a1, 0x100
++        lui a2, 0x5
++        addi a2, a2, 0x555
++        sw a2, 0(a1)
++spin:
++        j spin
+diff --git a/kernel/param.h b/kernel/param.h
+index 6624bff..eef9956 100644
+--- a/kernel/param.h
++++ b/kernel/param.h
+@@ -11,3 +11,4 @@
+ #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
+ #define FSSIZE       2000  // size of file system in blocks
+ #define MAXPATH      128   // maximum file path name
++#define RUN_LENGTH   10  // default running length
+diff --git a/kernel/proc.c b/kernel/proc.c
+index 58a8a0b..e92a78d 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -145,6 +145,7 @@ found:
+   memset(&p->context, 0, sizeof(p->context));
+   p->context.ra = (uint64)forkret;
+   p->context.sp = p->kstack + PGSIZE;
++  p->length = RUN_LENGTH;
+ 
+   return p;
+ }
+@@ -169,6 +170,7 @@ freeproc(struct proc *p)
+   p->killed = 0;
+   p->xstate = 0;
+   p->state = UNUSED;
++  p->length = 0;
+ }
+ 
+ // Create a user page table for a given process, with no user memory,
+@@ -445,6 +447,7 @@ void
+ scheduler(void)
+ {
+   struct proc *p;
++  struct proc *winner;
+   struct cpu *c = mycpu();
+ 
+   c->proc = 0;
+@@ -453,23 +456,27 @@ scheduler(void)
+     // turned off; enable them to avoid a deadlock if all
+     // processes are waiting.
+     intr_on();
++    int min_length = 65535;
+ 
+     for(p = proc; p < &proc[NPROC]; p++) {
+       acquire(&p->lock);
+-      if(p->state == RUNNABLE) {
+-        // Switch to chosen process.  It is the process's job
+-        // to release its lock and then reacquire it
+-        // before jumping back to us.
+-        p->state = RUNNING;
+-        c->proc = p;
+-        swtch(&c->context, &p->context);
+-
+-        // Process is done running for now.
+-        // It should have changed its p->state before coming back.
+-        c->proc = 0;
++      if(p->state == RUNNABLE && p->length < min_length) {
++        winner = p;
++        min_length = p->length;
+       }
+       release(&p->lock);
+     }
++
++    if(winner) {
++      acquire(&winner->lock);
++      if(min_length != 65535 && winner->state == RUNNABLE) {
++        winner->state = RUNNING;
++        c->proc = winner;
++        swtch(&c->context, &winner->context);
++        c->proc = 0;
++      }
++      release(&winner->lock);
++    }
+   }
+ }
+ 
+@@ -686,3 +693,14 @@ procdump(void)
+     printf("\n");
+   }
+ }
++
++int
++setlength(int length)
++{
++  struct proc *p = myproc();
++  acquire(&p->lock);
++  p->length = length;
++  // printf("Process %d length set to %d\n", p->pid, length);
++  release(&p->lock);
++  return 0;
++}
+diff --git a/kernel/proc.h b/kernel/proc.h
+index d021857..3a393f5 100644
+--- a/kernel/proc.h
++++ b/kernel/proc.h
+@@ -91,6 +91,7 @@ struct proc {
+   int killed;                  // If non-zero, have been killed
+   int xstate;                  // Exit status to be returned to parent's wait
+   int pid;                     // Process ID
++  int length;                  // running length
+ 
+   // wait_lock must be held when using this:
+   struct proc *parent;         // Parent process
+diff --git a/kernel/start.c b/kernel/start.c
+index e16f18a..fc8d468 100644
+--- a/kernel/start.c
++++ b/kernel/start.c
+@@ -11,7 +11,8 @@ void timerinit();
+ __attribute__ ((aligned (16))) char stack0[4096 * NCPU];
+ 
+ // a scratch area per CPU for machine-mode timer interrupts.
+-uint64 timer_scratch[NCPU][5];
++// one more added for quitting qemu.
++uint64 timer_scratch[NCPU][6];
+ 
+ // assembly code in kernelvec.S for machine-mode timer interrupt.
+ extern void timervec();
+@@ -73,9 +74,11 @@ timerinit()
+   // scratch[0..2] : space for timervec to save registers.
+   // scratch[3] : address of CLINT MTIMECMP register.
+   // scratch[4] : desired interval (in cycles) between timer interrupts.
++  // scratch[5] : stop flag to signal timervec to stop
+   uint64 *scratch = &timer_scratch[id][0];
+   scratch[3] = CLINT_MTIMECMP(id);
+   scratch[4] = interval;
++  scratch[5] = 0;
+   w_mscratch((uint64)scratch);
+ 
+   // set the machine-mode trap handler.
+@@ -87,3 +90,10 @@ timerinit()
+   // enable machine-mode timer interrupts.
+   w_mie(r_mie() | MIE_MTIE);
+ }
++
++void
++timerstop()
++{
++  // set stop flag in scratch area for hartid[0].
++  timer_scratch[0][5] = 1;
++}
+diff --git a/kernel/syscall.c b/kernel/syscall.c
+index ed65409..a2479ca 100644
+--- a/kernel/syscall.c
++++ b/kernel/syscall.c
+@@ -101,6 +101,8 @@ extern uint64 sys_unlink(void);
+ extern uint64 sys_link(void);
+ extern uint64 sys_mkdir(void);
+ extern uint64 sys_close(void);
++extern uint64 sys_quit(void);
++extern uint64 sys_setlength(void);
+ 
+ // An array mapping syscall numbers from syscall.h
+ // to the function that handles the system call.
+@@ -126,6 +128,8 @@ static uint64 (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++[SYS_quit]    sys_quit,
++[SYS_setlength] sys_setlength,
+ };
+ 
+ void
+diff --git a/kernel/syscall.h b/kernel/syscall.h
+index bc5f356..602de34 100644
+--- a/kernel/syscall.h
++++ b/kernel/syscall.h
+@@ -20,3 +20,5 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_quit   22
++#define SYS_setlength 23
+diff --git a/kernel/sysproc.c b/kernel/sysproc.c
+index 3b4d5bd..e42406c 100644
+--- a/kernel/sysproc.c
++++ b/kernel/sysproc.c
+@@ -91,3 +91,18 @@ sys_uptime(void)
+   release(&tickslock);
+   return xticks;
+ }
++
++uint64
++sys_quit(void)
++{
++  timerstop();
++  return 0;
++}
++
++uint64
++sys_setlength(void)
++{
++  int n;
++  argint(0, &n);
++  return setlength(n);
++}
+diff --git a/user/clear.c b/user/clear.c
+new file mode 100644
+index 0000000..6d0a66c
+--- /dev/null
++++ b/user/clear.c
+@@ -0,0 +1,9 @@
++#include "kernel/types.h"
++#include "user/user.h"
++
++int
++main()
++{
++  printf("\033[2J\033[H");
++  exit(0);
++}
+\ No newline at end of file
+diff --git a/user/quit.c b/user/quit.c
+new file mode 100644
+index 0000000..2e06ef1
+--- /dev/null
++++ b/user/quit.c
+@@ -0,0 +1,16 @@
++#include "kernel/param.h"
++#include "kernel/types.h"
++#include "user/user.h"
++
++int
++main(int argc, char *argv[])
++{
++  if (argc > 1)
++  {
++      printf("Usage: quit\n");
++      exit(1);
++  }
++  quit();
++  printf("QEMU: Terminated\n");
++  exit(0);
++}
+\ No newline at end of file
+diff --git a/user/testloop.c b/user/testloop.c
+new file mode 100644
+index 0000000..8f07822
+--- /dev/null
++++ b/user/testloop.c
+@@ -0,0 +1,22 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++
++int main(int argc, char* argv[]){
++    int pid = getpid();
++    int entry_time = uptime();
++    uint32 iters = atoi(argv[1]);
++    setlength(iters);
++    sleep(3);
++    printf("Process %d: Starting %u iterations at time %d\n", pid, iters, entry_time);
++    for(int i = 0; i < iters; i++){
++        // do some dummy work
++        for(int j = 0; j < 50000000; j++){
++            int x = j * j;
++            x = x + 1;
++        }
++    }
++    int exit_time = uptime();
++    printf("Process %d: Finished at time %d\n", pid, exit_time);
++    exit(0);
++}
+\ No newline at end of file
+diff --git a/user/user.h b/user/user.h
+index 04013ca..5446e56 100644
+--- a/user/user.h
++++ b/user/user.h
+@@ -22,6 +22,8 @@ int getpid(void);
+ char* sbrk(int);
+ int sleep(int);
+ int uptime(void);
++void quit(void);
++int setlength(int);
+ 
+ // ulib.c
+ int stat(const char*, struct stat*);
+diff --git a/user/usys.pl b/user/usys.pl
+index 01e426e..737ca35 100755
+--- a/user/usys.pl
++++ b/user/usys.pl
+@@ -36,3 +36,5 @@ entry("getpid");
+ entry("sbrk");
+ entry("sleep");
+ entry("uptime");
++entry("quit");
++entry("setlength");
