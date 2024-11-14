@@ -1,3 +1,6 @@
+# This Makefile is designed for separate compilation.
+# It requires GNU Make.
+
 # Compiler settings
 CC = gcc
 CXX = g++
