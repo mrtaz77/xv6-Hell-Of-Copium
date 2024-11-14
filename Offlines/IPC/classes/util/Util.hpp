@@ -27,7 +27,7 @@ void init_step_locks();
 void init_gallery_semaphore();
 void init_glass_corridor_semaphore();
 bool is_valid_params(int, int, int, int, int, int);
-void init_sync_objects();
+void init_locks_and_semaphores();
 void init_visitors();
 void standard_ticket_holder(Visitor*);
 void premium_ticket_holder(Visitor*);

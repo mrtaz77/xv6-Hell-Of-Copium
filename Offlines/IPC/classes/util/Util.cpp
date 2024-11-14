@@ -42,7 +42,7 @@ void output_params() {
 
 void open_museum() {
     init_visitors();
-    init_sync_objects();
+    init_locks_and_semaphores();
     int remaining_visitors = total_visitors;
     bool arrived[total_visitors] = {false};
     pthread_t visitor_threads[total_visitors];
@@ -73,9 +73,14 @@ void* visit(void* arg) {
     visitor->set_status(Status::STEPS);
     int step;
     for(step = 0; step < NUMBER_OF_STEPS; step++) {
+        // acquire lock for first step
         if(!step) pthread_mutex_lock(&step_locks[step]);
+        
         log(visitor->get_status(get_time(), step + 1));
         sleep(MAX_STEP_DELAY);
+        
+        // for all steps other than the last
+        // acquire the next step and release current step
         if(step != NUMBER_OF_STEPS - 1) {
             pthread_mutex_lock(&step_locks[step + 1]);
             pthread_mutex_unlock(&step_locks[step]);
@@ -163,7 +168,7 @@ bool is_valid_params(int N, int M, int w, int x, int y, int z) {
     return N >= 0 && M >= 0 && w >= 0 && x >= 0 && y >= 0 && z >= 0;
 }
 
-void init_sync_objects() {
+void init_locks_and_semaphores() {
     init_output_lock();
     init_step_locks();
     init_gallery_semaphore();
