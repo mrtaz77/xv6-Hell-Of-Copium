@@ -5,6 +5,7 @@
 #include <chrono>
 #include <unistd.h>
 #include <pthread.h>
+#include<semaphore.h>
 
 #include "../ticket-generator/TicketGenerator.hpp"
 #include "../visitor/Visitor.hpp"
@@ -23,5 +24,7 @@ void init_clock();
 long long get_time();
 void log(const string&);
 void init_step_locks();
+void init_gallery_semaphore();
+void init_glass_corridor_semaphore();
 
 #endif // _UTIL_HPP_

@@ -14,9 +14,12 @@
 #define LAMDA 10000.234
 
 // Delay before arrival at A
-#define MAX_ARRIVAL_DELAY 14
+#define MAX_ARRIVAL_DELAY 8
 
 // Delay between steps
 #define MAX_STEP_DELAY 2
+
+// Delay in glass corridor
+#define MAX_GLASS_CORRIDOR_DELAY 5
 
 #endif // _CONSTANTS_HPP_

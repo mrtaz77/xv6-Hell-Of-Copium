@@ -4,6 +4,8 @@ unsigned int N, M, w, x, y, z, total_visitors;
 Visitor* visitors;
 pthread_mutex_t output_lock;
 pthread_mutex_t step_locks[NUMBER_OF_STEPS];
+sem_t gallery_1;
+sem_t glass_corridor;
 auto start_time = chrono::high_resolution_clock::now();
 
 void input_params() {
@@ -27,6 +29,8 @@ void open_museum() {
         visitors[i] = Visitor(generator->get_ticket_id(TicketTier::PREMIUM), TicketTier::PREMIUM, rand_range(1, MAX_ARRIVAL_DELAY), Status::ARRIVAL_A);
     init_output_lock();
     init_step_locks();
+    init_gallery_semaphore();
+    init_glass_corridor_semaphore();
     init_clock();
     int remaining_visitors = total_visitors;
     bool arrived[total_visitors] = {false};
@@ -40,6 +44,7 @@ void open_museum() {
     }
     for(unsigned int i = 0; i < total_visitors; i++)
         pthread_join(visitor_threads[i], NULL);
+    pthread_exit(NULL);
 }
 
 void* visit(void* arg) {
@@ -50,17 +55,30 @@ void* visit(void* arg) {
     visitor->set_status(Status::ARRIVAL_B);
     log(visitor->get_status(get_time()));
     visitor->set_status(Status::STEPS);
-    
-    for(int step = 0; step < NUMBER_OF_STEPS; step++) {
+    int step;
+    for(step = 0; step < NUMBER_OF_STEPS; step++) {
         if(!step) pthread_mutex_lock(&step_locks[step]);
-        sleep(MAX_STEP_DELAY);
         log(visitor->get_status(get_time(), step + 1));
-        if(step != NUMBER_OF_STEPS - 1) pthread_mutex_lock(&step_locks[step + 1]);
-        pthread_mutex_unlock(&step_locks[step]);
+        sleep(MAX_STEP_DELAY);
+        if(step != NUMBER_OF_STEPS - 1) {
+            pthread_mutex_lock(&step_locks[step + 1]);
+            pthread_mutex_unlock(&step_locks[step]);
+        }    
     }
-
+    sem_wait(&gallery_1);
+    pthread_mutex_unlock(&step_locks[step - 1]);
     visitor->set_status(Status::C_GALLERY_1_ENTRANCE);
     log(visitor->get_status(get_time()));
+    sleep(x);
+    sem_wait(&glass_corridor);
+    sem_post(&gallery_1);
+    visitor->set_status(Status::D_GALLERY_1_EXIT);
+    log(visitor->get_status(get_time()));
+    sleep(rand_range(1, MAX_GLASS_CORRIDOR_DELAY));
+    sem_post(&glass_corridor);
+    visitor->set_status(Status::E_GALLERY_2_ENTRANCE);
+    log(visitor->get_status(get_time()));
+    pthread_exit(NULL);
     return NULL;
 }
 
@@ -88,4 +106,12 @@ void log(const string& message) {
 void init_step_locks() {
     for(unsigned int i = 0; i < NUMBER_OF_STEPS; i++)
         pthread_mutex_init(&step_locks[i], NULL);
+}
+
+void init_gallery_semaphore() {
+    sem_init(&gallery_1, 0, GALLERY1_MAX_OCCUPANCY);
+}
+
+void init_glass_corridor_semaphore() {
+    sem_init(&glass_corridor, 0, GLASS_CORRIDOR_MAX_OCCUPANCY);
 }
