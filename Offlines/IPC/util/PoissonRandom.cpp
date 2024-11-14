@@ -15,6 +15,7 @@
 */
 
 #include <random>
+#include "Constants.h"
 
 using namespace std;
 
@@ -22,7 +23,10 @@ static random_device rd;
 static mt19937 generator(rd());
 
 extern "C" int rand() {
-	double lambda = 10000.234;
-	poisson_distribution<int> pd(lambda);
+	poisson_distribution<int> pd(LAMDA);
 	return pd(generator);
+}
+
+extern "C" int rand_range(int min, int max) {
+	return min + rand() % (max - min + 1);
 }

@@ -6,6 +6,7 @@ extern "C" {
 #endif
 
 int rand();
+int rand_range(int, int);
 
 #ifdef __cplusplus
 }
