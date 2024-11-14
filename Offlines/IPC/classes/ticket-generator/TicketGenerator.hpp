@@ -18,7 +18,7 @@ private:
     TicketGenerator();
 public:
     static TicketGenerator* get_instance();
-    unsigned int get_ticket_id(enum TicketTier);
+    unsigned int get_ticket_id(TicketTier);
     static void destroy_instance();
 };
 

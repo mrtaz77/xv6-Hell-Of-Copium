@@ -14,7 +14,7 @@ TicketGenerator* TicketGenerator::get_instance() {
     return ticket_generator;
 }
 
-unsigned int TicketGenerator::get_ticket_id(enum TicketTier tier) {
+unsigned int TicketGenerator::get_ticket_id(TicketTier tier) {
     if(tier == STANDARD) {
         standard_ticket_id++;
         standard_ticket_id %= (STANDARD_TICKET_END_ID + 1);
