@@ -1,6 +1,7 @@
 # Added
 .lh/
 .vscode/
+main
 
 # Prerequisites
 *.d
