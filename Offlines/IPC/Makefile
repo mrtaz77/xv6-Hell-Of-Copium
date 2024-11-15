@@ -38,7 +38,7 @@ else
 endif
 
 run: $(EXEC)
-	./$(EXEC)
+	./$(EXEC) $(ARGS)
 
 # Include dependency files
 -include $(DEPS) 

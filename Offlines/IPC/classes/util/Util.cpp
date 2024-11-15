@@ -29,9 +29,17 @@ unsigned int standard_ticket_counter = 0;
 pthread_mutex_t premium_ticket_counter_lock;
 unsigned int premium_ticket_counter = 0;
 
-void input_params() {
-    cin >> N >> M;
-    cin >> w >> x >> y >> z;
+void input_params(int argc, char* argv[]) {
+    if(argc != 7) {
+        cout << "Usage: ./main N M w x y z" << endl;
+        return;
+    }
+    N = stoi(argv[1]);
+    M = stoi(argv[2]);
+    w = stoi(argv[3]);
+    x = stoi(argv[4]);
+    y = stoi(argv[5]);
+    z = stoi(argv[6]);
     total_visitors = N + M;
 }
 

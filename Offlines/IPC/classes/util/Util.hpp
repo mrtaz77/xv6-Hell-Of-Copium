@@ -15,7 +15,7 @@ using namespace std;
 
 extern unsigned int N, M, w, x, y, z;
 
-void input_params();
+void input_params(int, char*[]);
 void output_params();
 void open_museum();
 void* visit(void* arg);
