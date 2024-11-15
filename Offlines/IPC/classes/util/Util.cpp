@@ -124,7 +124,7 @@ void* visit(void* arg) {
         standard_ticket_holder(visitor);
     
     // exit
-    visitor->set_status(Status::EXIT_F);
+    visitor->set_status(Status::F_EXIT);
     log(visitor->get_status(get_time()));
 
     return NULL;

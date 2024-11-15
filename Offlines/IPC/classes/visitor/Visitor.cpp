@@ -44,8 +44,8 @@ string Visitor::get_status(long long timestamp, unsigned int step) const {
             return "Visitor " + to_string(ticket_id) + " is about to enter the photo booth at timestamp " + to_string(timestamp);
         case Status::INSIDE_PHOTO_BOOTH:
             return "Visitor " + to_string(ticket_id) + " is inside the photo booth at timestamp " + to_string(timestamp);
-        case Status::EXIT_F:
-            return "Visitor " + to_string(ticket_id) + " exited by F at timestamp " + to_string(timestamp);
+        case Status::F_EXIT:
+            return "Visitor " + to_string(ticket_id) + " is at F (exiting Gallery 2) at time " + to_string(timestamp);
         default:
             return "";
     }

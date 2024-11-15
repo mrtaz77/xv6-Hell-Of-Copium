@@ -16,7 +16,7 @@ enum class Status {
     E_GALLERY_2_ENTRANCE,
     ENTRY_PHOTO_BOOTH,
     INSIDE_PHOTO_BOOTH,
-    EXIT_F
+    F_EXIT
 };
 
 class Visitor {
