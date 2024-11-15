@@ -55,6 +55,8 @@ void open_museum() {
     }
     for(unsigned int i = 0; i < total_visitors; i++)
         pthread_join(visitor_threads[i], NULL);
+    destroy_locks_and_semaphores();
+    delete_visitors();
 }
 
 void* visit(void* arg) {
@@ -71,24 +73,22 @@ void* visit(void* arg) {
 
     // steps
     visitor->set_status(Status::STEPS);
-    int step;
-    for(step = 0; step < NUMBER_OF_STEPS; step++) {
-        // acquire lock for first step
-        if(!step) pthread_mutex_lock(&step_locks[step]);
-        
+    int step = 0;
+    
+    // acquire lock for first step
+    pthread_mutex_lock(&step_locks[step]);
+    for(step = 0; step < NUMBER_OF_STEPS - 1; step++) {
         log(visitor->get_status(get_time(), step + 1));
         sleep(MAX_STEP_DELAY);
         
         // for all steps other than the last
         // acquire the next step and release current step
-        if(step != NUMBER_OF_STEPS - 1) {
-            pthread_mutex_lock(&step_locks[step + 1]);
-            pthread_mutex_unlock(&step_locks[step]);
-        }    
+        pthread_mutex_lock(&step_locks[step + 1]);
+        pthread_mutex_unlock(&step_locks[step]);
     }
     
     sem_wait(&gallery_1);
-    pthread_mutex_unlock(&step_locks[step - 1]);
+    pthread_mutex_unlock(&step_locks[step]);
     
     // gallery 1
     visitor->set_status(Status::C_GALLERY_1_ENTRANCE);
@@ -184,6 +184,7 @@ void init_visitors() {
         visitors[i] = Visitor(generator->get_ticket_id(TicketTier::STANDARD), TicketTier::STANDARD, rand_range(1, MAX_ARRIVAL_DELAY), Status::ARRIVAL_A);
     for (unsigned int i = N; i < total_visitors; i++)
         visitors[i] = Visitor(generator->get_ticket_id(TicketTier::PREMIUM), TicketTier::PREMIUM, rand_range(1, MAX_ARRIVAL_DELAY), Status::ARRIVAL_A);
+    TicketGenerator::destroy_instance();
 }
 
 void standard_ticket_holder(Visitor* visitor) {
@@ -245,4 +246,40 @@ void init_photo_booth_locks() {
     pthread_mutex_init(&premium_ticket_counter_lock, NULL);
     pthread_mutex_init(&priority_lock, NULL);
     pthread_mutex_init(&exclusive_access_lock, NULL);
+}
+
+void destroy_locks_and_semaphores() {
+    destroy_output_lock();
+    destroy_step_locks();
+    destroy_gallery_semaphore();
+    destroy_glass_corridor_semaphore();
+    destroy_photo_booth_locks();
+}
+
+void delete_visitors() {
+    delete[] visitors;
+}
+
+void destroy_photo_booth_locks() {
+    pthread_mutex_destroy(&standard_ticket_counter_lock);
+    pthread_mutex_destroy(&premium_ticket_counter_lock);
+    pthread_mutex_destroy(&priority_lock);
+    pthread_mutex_destroy(&exclusive_access_lock);
+}
+
+void destroy_output_lock() {
+    pthread_mutex_destroy(&output_lock);
+}
+
+void destroy_step_locks() {
+    for(unsigned int i = 0; i < NUMBER_OF_STEPS; i++)
+        pthread_mutex_destroy(&step_locks[i]);
+}
+
+void destroy_gallery_semaphore() {
+    sem_destroy(&gallery_1);
+}
+
+void destroy_glass_corridor_semaphore() {
+    sem_destroy(&glass_corridor);
 }

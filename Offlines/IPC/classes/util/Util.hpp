@@ -5,7 +5,7 @@
 #include <chrono>
 #include <unistd.h>
 #include <pthread.h>
-#include<semaphore.h>
+#include <semaphore.h>
 
 #include "../ticket-generator/TicketGenerator.hpp"
 #include "../visitor/Visitor.hpp"
@@ -32,5 +32,12 @@ void init_visitors();
 void standard_ticket_holder(Visitor*);
 void premium_ticket_holder(Visitor*);
 void init_photo_booth_locks();
+void destroy_locks_and_semaphores();
+void delete_visitors();
+void destroy_photo_booth_locks();
+void destroy_output_lock();
+void destroy_step_locks();
+void destroy_gallery_semaphore();
+void destroy_glass_corridor_semaphore();
 
 #endif // _UTIL_HPP_
