@@ -39,5 +39,7 @@ void destroy_output_lock();
 void destroy_step_locks();
 void destroy_gallery_semaphore();
 void destroy_glass_corridor_semaphore();
+void standard_ticket_holder_first_preference(Visitor*);
+void premium_ticket_holder_second_preference(Visitor*);
 
 #endif // _UTIL_HPP_

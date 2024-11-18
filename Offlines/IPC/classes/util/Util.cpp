@@ -291,3 +291,38 @@ void destroy_gallery_semaphore() {
 void destroy_glass_corridor_semaphore() {
     sem_destroy(&glass_corridor);
 }
+
+// for reader preference
+void standard_ticket_holder_first_preference(Visitor* visitor) {
+    // similar to synch
+    pthread_mutex_lock(&standard_ticket_counter_lock);
+    standard_ticket_counter++;
+    if(standard_ticket_counter == 1)
+        pthread_mutex_lock(&priority_lock); // block incoming premium ticket holders
+    pthread_mutex_unlock(&standard_ticket_counter_lock);
+
+    // inside photo booth
+    visitor->set_status(Status::INSIDE_PHOTO_BOOTH);
+    log(visitor->get_status(get_time()));
+
+    // time in photo booth
+    sleep(z);
+
+    pthread_mutex_lock(&standard_ticket_counter_lock);
+    standard_ticket_counter--;
+    if(standard_ticket_counter == 0)
+        pthread_mutex_unlock(&priority_lock); // unblock incoming premium ticket holders
+    pthread_mutex_unlock(&standard_ticket_counter_lock);
+}
+
+void premium_ticket_holder_second_preference(Visitor* visitor) {
+    pthread_mutex_lock(&priority_lock);
+     
+    // inside photo booth
+    visitor->set_status(Status::INSIDE_PHOTO_BOOTH);
+    log(visitor->get_status(get_time()));
+    // time in photo booth
+    sleep(z);
+
+    pthread_mutex_unlock(&priority_lock);
+}
