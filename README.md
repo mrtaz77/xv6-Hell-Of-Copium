@@ -20,5 +20,5 @@ Codes and assignments related to xv6 from OS course. Made with Copium.
 - [Spec](/Specs/IPC%20Offline%20Specification-v.2.pdf)
 
 ## Offline 5
-- `Threading`|``Synchronization`
+- `Threading`|`Synchronization`
 - [Spec](/Specs/Offline_5_Threading.md)
