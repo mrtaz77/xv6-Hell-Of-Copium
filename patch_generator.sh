@@ -1,7 +1,7 @@
 #!/bin/bash
 
-patch_file_name="scheduling"
-output_dir="../Offlines/Scheduling"
+patch_file_name="threading"
+output_dir="../Offlines/threading"
 
 cd xv6-riscv || {
 	echo "xv6-riscv dir not found!"
