@@ -124,7 +124,7 @@ index 6624bff..87eb47e 100644
  #define MAXPATH      128   // maximum file path name
 +#define FAKE_RA      0xffffffff // fake return address 
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..b1020bd 100644
+index 58a8a0b..9c71068 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -15,11 +15,21 @@ struct proc *initproc;
@@ -172,20 +172,16 @@ index 58a8a0b..b1020bd 100644
  
    // Allocate a trapframe page.
    if((p->trapframe = (struct trapframe *)kalloc()) == 0){
-@@ -158,8 +171,10 @@ freeproc(struct proc *p)
-   if(p->trapframe)
+@@ -159,7 +172,7 @@ freeproc(struct proc *p)
      kfree((void*)p->trapframe);
    p->trapframe = 0;
--  if(p->pagetable)
+   if(p->pagetable)
 -    proc_freepagetable(p->pagetable, p->sz);
-+  if(p->pagetable){
-+    if(p->is_thread) thread_freepagetable(p->pagetable, p->sz);
-+    else proc_freepagetable(p->pagetable, p->sz);
-+  }
++    p->is_thread ? thread_freepagetable(p->pagetable, p->sz) : proc_freepagetable(p->pagetable, p->sz);
    p->pagetable = 0;
    p->sz = 0;
    p->pid = 0;
-@@ -169,8 +184,12 @@ freeproc(struct proc *p)
+@@ -169,8 +182,12 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
@@ -198,7 +194,7 @@ index 58a8a0b..b1020bd 100644
  // Create a user page table for a given process, with no user memory,
  // but with trampoline and trapframe pages.
  pagetable_t
-@@ -251,6 +270,9 @@ userinit(void)
+@@ -251,6 +268,9 @@ userinit(void)
  
    p->state = RUNNABLE;
  
@@ -208,7 +204,7 @@ index 58a8a0b..b1020bd 100644
    release(&p->lock);
  }
  
-@@ -283,6 +305,12 @@ fork(void)
+@@ -283,6 +303,12 @@ fork(void)
    struct proc *np;
    struct proc *p = myproc();
  
@@ -221,7 +217,7 @@ index 58a8a0b..b1020bd 100644
    // Allocate process.
    if((np = allocproc()) == 0){
      return -1;
-@@ -311,6 +339,9 @@ fork(void)
+@@ -311,6 +337,9 @@ fork(void)
    safestrcpy(np->name, p->name, sizeof(p->name));
  
    pid = np->pid;
@@ -231,7 +227,7 @@ index 58a8a0b..b1020bd 100644
  
    release(&np->lock);
  
-@@ -367,6 +398,8 @@ exit(int status)
+@@ -367,6 +396,8 @@ exit(int status)
  
    acquire(&wait_lock);
  
@@ -240,7 +236,7 @@ index 58a8a0b..b1020bd 100644
    // Give any children to init.
    reparent(p);
  
-@@ -686,3 +719,193 @@ procdump(void)
+@@ -686,3 +717,193 @@ procdump(void)
      printf("\n");
    }
  }
@@ -735,7 +731,7 @@ index 0000000..2e06ef1
 \ No newline at end of file
 diff --git a/user/threads.c b/user/threads.c
 new file mode 100644
-index 0000000..1204642
+index 0000000..7242959
 --- /dev/null
 +++ b/user/threads.c
 @@ -0,0 +1,68 @@
@@ -772,7 +768,7 @@ index 0000000..1204642
 +         // thread_mutex_lock(&mlock);
 +         old = total_balance;
 +         delay(100000);
-+	 // if(old != total_balance)  printf("we will miss an update. old: %d total_balance: %d\n", old, total_balance);
++	 if(old != total_balance)  printf("we will miss an update. old: %d total_balance: %d\n", old, total_balance);
 +         total_balance = old + 1;
 +         //thread_spin_unlock(&lock);
 +         // thread_mutex_lock(&mlock);
