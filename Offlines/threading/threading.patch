@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 62fd0f8..b7f8dd5 100644
+index 62fd0f8..d79e77f 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -56,7 +56,7 @@ LD = $(TOOLPREFIX)ld
@@ -11,6 +11,15 @@ index 62fd0f8..b7f8dd5 100644
  CFLAGS += -MD
  CFLAGS += -mcmodel=medany
  # CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
+@@ -94,7 +94,7 @@ $U/initcode: $U/initcode.S
+ tags: $(OBJS) _init
+ 	etags *.S *.c
+ 
+-ULIB = $U/ulib.o $U/usys.o $U/printf.o $U/umalloc.o
++ULIB = $U/ulib.o $U/usys.o $U/printf.o $U/umalloc.o $U/thread_spinlock.o
+ 
+ _%: %.o $(ULIB)
+ 	$(LD) $(LDFLAGS) -T $U/user.ld -o $@ $^
 @@ -139,6 +139,9 @@ UPROGS=\
  	$U/_grind\
  	$U/_wc\
@@ -31,7 +40,7 @@ index 62fd0f8..b7f8dd5 100644
  
  QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
-index d1b6bb9..c1bf298 100644
+index d1b6bb9..d8fbc10 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
 @@ -9,6 +9,9 @@ struct sleeplock;
@@ -44,7 +53,7 @@ index d1b6bb9..c1bf298 100644
  // bio.c
  void            binit(void);
  struct buf*     bread(uint, uint);
-@@ -106,6 +109,11 @@ void            yield(void);
+@@ -106,6 +109,12 @@ void            yield(void);
  int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
  int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
  void            procdump(void);
@@ -53,10 +62,11 @@ index d1b6bb9..c1bf298 100644
 +void            thread_exit(void);
 +void            threadinit(void);
 +void            thread_freepagetable(pagetable_t, uint64);
++int             grow_child_threads(struct proc*, uint64);
  
  // swtch.S
  void            swtch(struct context*, struct context*);
-@@ -173,6 +181,8 @@ uint64          walkaddr(pagetable_t, uint64);
+@@ -173,6 +182,8 @@ uint64          walkaddr(pagetable_t, uint64);
  int             copyout(pagetable_t, uint64, char *, uint64);
  int             copyin(pagetable_t, char *, uint64, uint64);
  int             copyinstr(pagetable_t, char *, uint64, uint64);
@@ -124,7 +134,7 @@ index 6624bff..87eb47e 100644
  #define MAXPATH      128   // maximum file path name
 +#define FAKE_RA      0xffffffff // fake return address 
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..9c71068 100644
+index 58a8a0b..5b7354e 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -15,11 +15,21 @@ struct proc *initproc;
@@ -204,7 +214,40 @@ index 58a8a0b..9c71068 100644
    release(&p->lock);
  }
  
-@@ -283,6 +303,12 @@ fork(void)
+@@ -262,15 +282,32 @@ growproc(int n)
+   uint64 sz;
+   struct proc *p = myproc();
+ 
++  // Only allow one thread or process to alloc/dealloc
++  // heap at a time. Since memlock of parent is shared
++  // with the child threads, holding lock on parent's
++  // thread will be enough
++  acquire(p->memlock);
++
+   sz = p->sz;
+   if(n > 0){
+     if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
++      release(p->memlock);
+       return -1;
+     }
+   } else if(n < 0){
+     sz = uvmdealloc(p->pagetable, sz, sz + n);
+   }
+   p->sz = sz;
++
++  // Parent process has changed its size
++  // Change available in physical address
++  // not in virtual address
++  // need to growproc for child threads
++  if(grow_child_threads(p, sz) < 0) {
++    release(p->memlock);
++    return -1;
++  }
++  release(p->memlock);
+   return 0;
+ }
+ 
+@@ -283,6 +320,12 @@ fork(void)
    struct proc *np;
    struct proc *p = myproc();
  
@@ -217,7 +260,7 @@ index 58a8a0b..9c71068 100644
    // Allocate process.
    if((np = allocproc()) == 0){
      return -1;
-@@ -311,6 +337,9 @@ fork(void)
+@@ -311,6 +354,9 @@ fork(void)
    safestrcpy(np->name, p->name, sizeof(p->name));
  
    pid = np->pid;
@@ -227,7 +270,7 @@ index 58a8a0b..9c71068 100644
  
    release(&np->lock);
  
-@@ -367,6 +396,8 @@ exit(int status)
+@@ -367,6 +413,8 @@ exit(int status)
  
    acquire(&wait_lock);
  
@@ -236,7 +279,7 @@ index 58a8a0b..9c71068 100644
    // Give any children to init.
    reparent(p);
  
-@@ -686,3 +717,193 @@ procdump(void)
+@@ -686,3 +734,209 @@ procdump(void)
      printf("\n");
    }
  }
@@ -429,6 +472,22 @@ index 58a8a0b..9c71068 100644
 +      release(&pp->lock);
 +    }
 +  }
++}
++
++int
++grow_child_threads(struct proc *parent, uint64 sz)
++{
++  struct proc *pp;
++  for(pp = proc; pp < &proc[NPROC]; pp++){
++    if((pp != parent)
++    && (pp->mem_id == parent->mem_id)){
++      if(uvmirror(parent->pagetable, pp->pagetable, parent->sz, pp->sz) < 0){
++        return -1;
++      }
++      pp->sz = sz;
++    }
++  }
++  return 0;
 +}
 \ No newline at end of file
 diff --git a/kernel/proc.h b/kernel/proc.h
@@ -729,20 +788,118 @@ index 0000000..2e06ef1
 +  exit(0);
 +}
 \ No newline at end of file
+diff --git a/user/thread_spinlock.c b/user/thread_spinlock.c
+new file mode 100644
+index 0000000..d6beb80
+--- /dev/null
++++ b/user/thread_spinlock.c
+@@ -0,0 +1,67 @@
++#include "thread_spinlock.h"
++
++static int thread_holding(struct thread_spinlock*);
++
++void
++thread_spin_init(struct thread_spinlock *lk)
++{
++  lk->locked = 0;
++  lk->pid = 0;
++}
++
++void
++thread_spin_lock(struct thread_spinlock *lk)
++{
++  if(thread_holding(lk))
++    printf("Already holding the lock trying to lock\n");
++ 
++  // On RISC-V, sync_lock_test_and_set turns into an atomic swap:
++  //   a5 = 1
++  //   s1 = &lk->locked
++  //   amoswap.w.aq a5, a5, (s1)
++  while(__sync_lock_test_and_set(&lk->locked, 1) != 0)
++    ;
++     
++  // Tell the C compiler and the processor to not move loads or stores
++  // past this point, to ensure that the critical section's memory
++  // references happen strictly after the lock is acquired.
++  // On RISC-V, this emits a fence instruction.
++  __sync_synchronize();
++
++  // Record info about lock acquisition for thread_holding() and debugging.
++  lk->pid = getpid();
++}
++
++void
++thread_spin_unlock(struct thread_spinlock *lk)
++{
++  if(!thread_holding(lk))
++    printf("Not holding the lock trying to unlock\n");
++
++  lk->pid = 0;
++
++  // Tell the C compiler and the CPU to not move loads or stores
++  // past this point, to ensure that all the stores in the critical
++  // section are visible to other CPUs before the lock is released,
++  // and that loads in the critical section occur strictly before
++  // the lock is released.
++  // On RISC-V, this emits a fence instruction.
++  __sync_synchronize();
++
++  // Release the lock, equivalent to lk->locked = 0.
++  // This code doesn't use a C assignment, since the C standard
++  // implies that an assignment might be implemented with
++  // multiple store instructions.
++  // On RISC-V, sync_lock_release turns into an atomic swap:
++  //   s1 = &lk->locked
++  //   amoswap.w zero, zero, (s1)
++  __sync_lock_release(&lk->locked);
++}
++
++static int
++thread_holding(struct thread_spinlock *lk)
++{
++  int is_holding;
++  is_holding = (lk->locked && lk->pid == getpid());
++  return is_holding;
++}
+diff --git a/user/thread_spinlock.h b/user/thread_spinlock.h
+new file mode 100644
+index 0000000..810bddb
+--- /dev/null
++++ b/user/thread_spinlock.h
+@@ -0,0 +1,16 @@
++#ifndef THREAD_SPINLOCK_H
++#define THREAD_SPINLOCK_H
++
++#include "kernel/types.h"
++#include "user/user.h"
++
++struct thread_spinlock {
++  uint locked;
++  int pid;
++};
++
++void thread_spin_init(struct thread_spinlock*);
++void thread_spin_lock(struct thread_spinlock*);
++void thread_spin_unlock(struct thread_spinlock*);  
++
++#endif // THREAD_SPINLOCK_H
 diff --git a/user/threads.c b/user/threads.c
 new file mode 100644
-index 0000000..7242959
+index 0000000..c110e8c
 --- /dev/null
 +++ b/user/threads.c
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,73 @@
 +#include "kernel/types.h"
 +#include "kernel/stat.h"
 +#include "user/user.h"
++#include "user/thread_spinlock.h"
 +
 +struct balance {
 +    char name[32];
 +    int amount;
 +};
++
++struct thread_spinlock lock;
 +
 +volatile int total_balance = 0;
 +
@@ -764,13 +921,13 @@ index 0000000..7242959
 +
 +    for (i = 0; i < b->amount; i++) { 
 +        // lock and mlock will be implemented by you.
-+         // thread_spin_lock(&lock);
++         thread_spin_lock(&lock);
 +         // thread_mutex_lock(&mlock);
 +         old = total_balance;
 +         delay(100000);
 +	 if(old != total_balance)  printf("we will miss an update. old: %d total_balance: %d\n", old, total_balance);
 +         total_balance = old + 1;
-+         //thread_spin_unlock(&lock);
++         thread_spin_unlock(&lock);
 +         // thread_mutex_lock(&mlock);
 +
 +    }
@@ -788,6 +945,8 @@ index 0000000..7242959
 + 
 +  void *s1, *s2;
 +  int thread1, thread2, r1, r2;
++
++  thread_spin_init(&lock);
 +
 +  s1 = malloc(4096); // 4096 is the PGSIZE defined in kernel/riscv.h
 +  s2 = malloc(4096);
