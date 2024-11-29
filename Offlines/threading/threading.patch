@@ -935,7 +935,7 @@ index 0000000..810bddb
 +#endif // THREAD_SPINLOCK_H
 diff --git a/user/threads.c b/user/threads.c
 new file mode 100644
-index 0000000..e959c16
+index 0000000..09fe665
 --- /dev/null
 +++ b/user/threads.c
 @@ -0,0 +1,75 @@
@@ -974,13 +974,13 @@ index 0000000..e959c16
 +    for (i = 0; i < b->amount; i++) { 
 +        // lock and mlock will be implemented by you.
 +        //  thread_spin_lock(&lock);
-+         thread_mutex_lock(&mlock);
++        //  thread_mutex_lock(&mlock);
 +         old = total_balance;
 +         delay(100000);
-+	//  if(old != total_balance)  printf("we will miss an update. old: %d total_balance: %d\n", old, total_balance);
++	 if(old != total_balance)  printf("we will miss an update. old: %d total_balance: %d\n", old, total_balance);
 +         total_balance = old + 1;
 +        //  thread_spin_unlock(&lock);
-+         thread_mutex_unlock(&mlock);
++        //  thread_mutex_unlock(&mlock);
 +
 +    }
 +  
