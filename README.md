@@ -15,7 +15,7 @@ Codes and assignments related to xv6 from OS course. Made with Copium.
 - [Submission](/Offlines/Scheduling/scheduling.patch)
 
 ## Offline 4
-- `Inter Process Communication0`|`Semaphore`|`Mutex`
+- `Inter Process Communication`|`Semaphore`|`Mutex`
 - `Reader-Writer's problem with writer's preference`
 - [Spec](/Specs/IPC%20Offline%20Specification-v.2.pdf)
 
