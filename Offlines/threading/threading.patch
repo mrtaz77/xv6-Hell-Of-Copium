@@ -800,56 +800,38 @@ index 0000000..2e06ef1
 \ No newline at end of file
 diff --git a/user/thread_mutex.c b/user/thread_mutex.c
 new file mode 100644
-index 0000000..5c5542a
+index 0000000..b680932
 --- /dev/null
 +++ b/user/thread_mutex.c
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,22 @@
 +#include "thread_mutex.h"
-+
-+static int thread_holding(struct thread_mutex*);
 +
 +void
 +thread_mutex_init(struct thread_mutex *m)
 +{
 +  m->locked = 0;
-+  m->pid = 0;
 +}
 +
 +void
 +thread_mutex_lock(struct thread_mutex *m)
 +{
-+  if(thread_holding(m))
-+    printf("Already holding the lock trying to lock\n");
 +  while(__sync_lock_test_and_set(&m->locked, 1) != 0)
 +    yield();
 +  __sync_synchronize();
-+  m->pid = getpid();
 +}
 +
 +void
 +thread_mutex_unlock(struct thread_mutex *m)
 +{
-+  if(!thread_holding(m))
-+    printf("Not holding the lock trying to unlock\n");
-+  m->pid = 0;
 +  __sync_synchronize();
 +  __sync_lock_release(&m->locked);
 +}
-+
-+static int
-+thread_holding(struct thread_mutex *m)
-+{
-+  int is_holding;
-+  is_holding = (m->locked && m->pid == getpid());
-+  return is_holding;
-+}
-\ No newline at end of file
 diff --git a/user/thread_mutex.h b/user/thread_mutex.h
 new file mode 100644
-index 0000000..b8e9394
+index 0000000..63eb6d6
 --- /dev/null
 +++ b/user/thread_mutex.h
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,15 @@
 +#ifndef THREAD_MUTEX_H
 +#define THREAD_MUTEX_H
 +
@@ -858,7 +840,6 @@ index 0000000..b8e9394
 +
 +struct thread_mutex {
 +  uint locked;
-+  int pid;
 +};
 +
 +void thread_mutex_init(struct thread_mutex*);
@@ -868,55 +849,38 @@ index 0000000..b8e9394
 +#endif // THREAD_MUTEX_H
 diff --git a/user/thread_spinlock.c b/user/thread_spinlock.c
 new file mode 100644
-index 0000000..a06008d
+index 0000000..d2792a1
 --- /dev/null
 +++ b/user/thread_spinlock.c
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,22 @@
 +#include "thread_spinlock.h"
-+
-+static int thread_holding(struct thread_spinlock*);
 +
 +void
 +thread_spin_init(struct thread_spinlock *lk)
 +{
 +  lk->locked = 0;
-+  lk->pid = 0;
 +}
 +
 +void
 +thread_spin_lock(struct thread_spinlock *lk)
 +{
-+  if(thread_holding(lk))
-+    printf("Already holding the lock trying to lock\n");
 +  while(__sync_lock_test_and_set(&lk->locked, 1) != 0)
 +    ;
 +  __sync_synchronize();
-+  lk->pid = getpid();
 +}
 +
 +void
 +thread_spin_unlock(struct thread_spinlock *lk)
 +{
-+  if(!thread_holding(lk))
-+    printf("Not holding the lock trying to unlock\n");
-+  lk->pid = 0;
 +  __sync_synchronize();
 +  __sync_lock_release(&lk->locked);
 +}
-+
-+static int
-+thread_holding(struct thread_spinlock *lk)
-+{
-+  int is_holding;
-+  is_holding = (lk->locked && lk->pid == getpid());
-+  return is_holding;
-+}
 diff --git a/user/thread_spinlock.h b/user/thread_spinlock.h
 new file mode 100644
-index 0000000..810bddb
+index 0000000..cf43c15
 --- /dev/null
 +++ b/user/thread_spinlock.h
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,15 @@
 +#ifndef THREAD_SPINLOCK_H
 +#define THREAD_SPINLOCK_H
 +
@@ -925,7 +889,6 @@ index 0000000..810bddb
 +
 +struct thread_spinlock {
 +  uint locked;
-+  int pid;
 +};
 +
 +void thread_spin_init(struct thread_spinlock*);
