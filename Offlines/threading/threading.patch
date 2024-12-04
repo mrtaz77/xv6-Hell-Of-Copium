@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 62fd0f8..9307f80 100644
+index 62fd0f8..eb17b5e 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -56,7 +56,7 @@ LD = $(TOOLPREFIX)ld
@@ -30,15 +30,6 @@ index 62fd0f8..9307f80 100644
  
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
-@@ -160,7 +163,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
- 	then echo "-gdb tcp::$(GDBPORT)"; \
- 	else echo "-s -p $(GDBPORT)"; fi)
- ifndef CPUS
--CPUS := 3
-+CPUS := 1
- endif
- 
- QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 diff --git a/kernel/defs.h b/kernel/defs.h
 index d1b6bb9..d8fbc10 100644
 --- a/kernel/defs.h
@@ -134,16 +125,19 @@ index 6624bff..87eb47e 100644
  #define MAXPATH      128   // maximum file path name
 +#define FAKE_RA      0xffffffff // fake return address 
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 58a8a0b..5b7354e 100644
+index 58a8a0b..2dbbfc1 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
-@@ -15,11 +15,21 @@ struct proc *initproc;
+@@ -15,11 +15,24 @@ struct proc *initproc;
  int nextpid = 1;
  struct spinlock pid_lock;
  
 +int nextmemoryid = 0;
 +struct spinlock memoryid_lock;
 +
++// passing reference in thread create
++// ensures child threads and parent share the
++// same memory lock
 +struct spinlock mem_locks[NPROC];
 +
 +static int get_next_memoryid();
@@ -159,30 +153,30 @@ index 58a8a0b..5b7354e 100644
  // helps ensure that wakeups of wait()ing
  // parents are not lost. helps obey the
  // memory model when using p->parent.
-@@ -110,6 +120,7 @@ static struct proc*
+@@ -110,6 +123,7 @@ static struct proc*
  allocproc(void)
  {
    struct proc *p;
-+  int i = 0;
++  int mem_lock_idx = 0;
  
    for(p = proc; p < &proc[NPROC]; p++) {
      acquire(&p->lock);
-@@ -118,12 +129,14 @@ allocproc(void)
+@@ -118,12 +132,14 @@ allocproc(void)
      } else {
        release(&p->lock);
      }
-+    i++;
++    mem_lock_idx++;
    }
    return 0;
  
  found:
    p->pid = allocpid();
    p->state = USED;
-+  p->memlock = &mem_locks[i];
++  p->memlock = &mem_locks[mem_lock_idx];
  
    // Allocate a trapframe page.
    if((p->trapframe = (struct trapframe *)kalloc()) == 0){
-@@ -159,7 +172,7 @@ freeproc(struct proc *p)
+@@ -159,7 +175,7 @@ freeproc(struct proc *p)
      kfree((void*)p->trapframe);
    p->trapframe = 0;
    if(p->pagetable)
@@ -191,7 +185,7 @@ index 58a8a0b..5b7354e 100644
    p->pagetable = 0;
    p->sz = 0;
    p->pid = 0;
-@@ -169,8 +182,12 @@ freeproc(struct proc *p)
+@@ -169,8 +185,12 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
@@ -204,7 +198,7 @@ index 58a8a0b..5b7354e 100644
  // Create a user page table for a given process, with no user memory,
  // but with trampoline and trapframe pages.
  pagetable_t
-@@ -251,6 +268,9 @@ userinit(void)
+@@ -251,6 +271,9 @@ userinit(void)
  
    p->state = RUNNABLE;
  
@@ -214,7 +208,7 @@ index 58a8a0b..5b7354e 100644
    release(&p->lock);
  }
  
-@@ -262,15 +282,32 @@ growproc(int n)
+@@ -262,15 +285,32 @@ growproc(int n)
    uint64 sz;
    struct proc *p = myproc();
  
@@ -247,7 +241,7 @@ index 58a8a0b..5b7354e 100644
    return 0;
  }
  
-@@ -283,6 +320,12 @@ fork(void)
+@@ -283,6 +323,12 @@ fork(void)
    struct proc *np;
    struct proc *p = myproc();
  
@@ -260,7 +254,7 @@ index 58a8a0b..5b7354e 100644
    // Allocate process.
    if((np = allocproc()) == 0){
      return -1;
-@@ -311,6 +354,9 @@ fork(void)
+@@ -311,6 +357,9 @@ fork(void)
    safestrcpy(np->name, p->name, sizeof(p->name));
  
    pid = np->pid;
@@ -270,7 +264,7 @@ index 58a8a0b..5b7354e 100644
  
    release(&np->lock);
  
-@@ -367,6 +413,8 @@ exit(int status)
+@@ -367,6 +416,8 @@ exit(int status)
  
    acquire(&wait_lock);
  
@@ -279,7 +273,7 @@ index 58a8a0b..5b7354e 100644
    // Give any children to init.
    reparent(p);
  
-@@ -686,3 +734,209 @@ procdump(void)
+@@ -686,3 +737,210 @@ procdump(void)
      printf("\n");
    }
  }
@@ -326,7 +320,7 @@ index 58a8a0b..5b7354e 100644
 +  nt->sz = t->sz;
 +  nt->trapframe->a0 = (uint64)arg; // pass argument as pointer
 +  nt->trapframe->ra = FAKE_RA;
-+  nt->trapframe->sp = ((uint64)stack + PGSIZE) & ~0xF; // 16-byte aligned
++  nt->trapframe->sp = ((uint64)stack + PGSIZE) & ~0xF; // sp 16-byte aligned
 +  nt->is_thread = 1;
 +  nt->trapframe->epc = (uint64)fcn;
 +
@@ -392,6 +386,7 @@ index 58a8a0b..5b7354e 100644
 +  }
 +}
 +
++// since
 +void
 +threadinit()
 +{
@@ -708,10 +703,10 @@ index 3b4d5bd..f018aca 100644
 +  return 0;
 +}
 diff --git a/kernel/vm.c b/kernel/vm.c
-index 5c31e87..56d152f 100644
+index 5c31e87..e846782 100644
 --- a/kernel/vm.c
 +++ b/kernel/vm.c
-@@ -449,3 +449,47 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
+@@ -449,3 +449,48 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
      return -1;
    }
  }
@@ -744,7 +739,8 @@ index 5c31e87..56d152f 100644
 +    }
 +  }
 +  else if(PGROUNDUP(parent_sz) < PGROUNDUP(thread_sz)){
-+    int npages = (PGROUNDUP(thread_sz) - PGROUNDUP(parent_sz)) / PGSIZE;
++    int npages = PGROUNDUP(thread_sz) - PGROUNDUP(parent_sz); 
++    npages /= PGSIZE;
 +    // remove npage mappings only
 +    // doFree = 0 ensures that the physical memory is not freed
 +    uvmunmap(thread_pt, PGROUNDUP(parent_sz), npages, 0);
@@ -800,21 +796,25 @@ index 0000000..2e06ef1
 \ No newline at end of file
 diff --git a/user/thread_mutex.c b/user/thread_mutex.c
 new file mode 100644
-index 0000000..b680932
+index 0000000..8e62675
 --- /dev/null
 +++ b/user/thread_mutex.c
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,35 @@
 +#include "thread_mutex.h"
 +
 +void
 +thread_mutex_init(struct thread_mutex *m)
 +{
 +  m->locked = 0;
++  m->pid = 0;
 +}
 +
 +void
 +thread_mutex_lock(struct thread_mutex *m)
 +{
++  if(holding_mutex_thread(m))
++    fprintf(2, "Warning: Lock already held by this thread\n");
++  m->pid = getpid();
 +  while(__sync_lock_test_and_set(&m->locked, 1) != 0)
 +    yield();
 +  __sync_synchronize();
@@ -823,15 +823,25 @@ index 0000000..b680932
 +void
 +thread_mutex_unlock(struct thread_mutex *m)
 +{
++  if(!holding_mutex_thread(&m->locked))
++    fprintf(2, "Warning: Lock not held by this thread\n");
++  m->pid = 0;
 +  __sync_synchronize();
 +  __sync_lock_release(&m->locked);
 +}
++
++int
++holding_mutex_thread(struct thread_mutex *m)
++{
++  return (m->locked && m->pid == getpid());
++}
+\ No newline at end of file
 diff --git a/user/thread_mutex.h b/user/thread_mutex.h
 new file mode 100644
-index 0000000..63eb6d6
+index 0000000..e29ec7a
 --- /dev/null
 +++ b/user/thread_mutex.h
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,17 @@
 +#ifndef THREAD_MUTEX_H
 +#define THREAD_MUTEX_H
 +
@@ -840,30 +850,37 @@ index 0000000..63eb6d6
 +
 +struct thread_mutex {
 +  uint locked;
++  int pid;
 +};
 +
 +void thread_mutex_init(struct thread_mutex*);
 +void thread_mutex_lock(struct thread_mutex*);
 +void thread_mutex_unlock(struct thread_mutex*);
++void holding_mutex_thread(struct thread_mutex*);
 +
 +#endif // THREAD_MUTEX_H
 diff --git a/user/thread_spinlock.c b/user/thread_spinlock.c
 new file mode 100644
-index 0000000..d2792a1
+index 0000000..771b9f6
 --- /dev/null
 +++ b/user/thread_spinlock.c
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,38 @@
 +#include "thread_spinlock.h"
 +
 +void
 +thread_spin_init(struct thread_spinlock *lk)
 +{
 +  lk->locked = 0;
++  lk->pid = 0;
 +}
 +
 +void
 +thread_spin_lock(struct thread_spinlock *lk)
 +{
++  if(holding_spin_thread(lk))
++    fprintf(2, "Warning: Lock already held by this thread\n");
++  
++  lk->pid = getpid();
 +  while(__sync_lock_test_and_set(&lk->locked, 1) != 0)
 +    ;
 +  __sync_synchronize();
@@ -872,15 +889,26 @@ index 0000000..d2792a1
 +void
 +thread_spin_unlock(struct thread_spinlock *lk)
 +{
++  if(!holding_spin_thread(lk))
++    fprintf(2, "Warning: Lock not held by this thread\n");
++  
++  lk->pid = 0;
 +  __sync_synchronize();
 +  __sync_lock_release(&lk->locked);
 +}
++
++// Check if lock is held by this thread
++int
++holding_spin_thread(struct thread_spinlock *lk)
++{
++  return (lk->locked && lk->pid == getpid());
++}
 diff --git a/user/thread_spinlock.h b/user/thread_spinlock.h
 new file mode 100644
-index 0000000..cf43c15
+index 0000000..199de3e
 --- /dev/null
 +++ b/user/thread_spinlock.h
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,18 @@
 +#ifndef THREAD_SPINLOCK_H
 +#define THREAD_SPINLOCK_H
 +
@@ -889,19 +917,22 @@ index 0000000..cf43c15
 +
 +struct thread_spinlock {
 +  uint locked;
++  int pid;
 +};
 +
 +void thread_spin_init(struct thread_spinlock*);
 +void thread_spin_lock(struct thread_spinlock*);
-+void thread_spin_unlock(struct thread_spinlock*);  
++void thread_spin_unlock(struct thread_spinlock*);
++int holding_spin_thread(struct thread_spinlock*);
++
 +
 +#endif // THREAD_SPINLOCK_H
 diff --git a/user/threads.c b/user/threads.c
 new file mode 100644
-index 0000000..09fe665
+index 0000000..d0716e5
 --- /dev/null
 +++ b/user/threads.c
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,76 @@
 +#include "kernel/types.h"
 +#include "kernel/stat.h"
 +#include "user/user.h"
@@ -936,13 +967,13 @@ index 0000000..09fe665
 +
 +    for (i = 0; i < b->amount; i++) { 
 +        // lock and mlock will be implemented by you.
-+        //  thread_spin_lock(&lock);
++         thread_spin_lock(&lock);
 +        //  thread_mutex_lock(&mlock);
 +         old = total_balance;
 +         delay(100000);
 +	 if(old != total_balance)  printf("we will miss an update. old: %d total_balance: %d\n", old, total_balance);
 +         total_balance = old + 1;
-+        //  thread_spin_unlock(&lock);
++         thread_spin_unlock(&lock);
 +        //  thread_mutex_unlock(&mlock);
 +
 +    }
@@ -955,13 +986,14 @@ index 0000000..09fe665
 +
 +int main(int argc, char *argv[]) {
 +
-+  struct balance b1 = {"b1", 3200};
-+  struct balance b2 = {"b2", 2800};
++  struct balance b1 = {"b1", 12};
++  struct balance b2 = {"b2", 20};
 + 
 +  void *s1, *s2;
 +  int thread1, thread2, r1, r2;
 +
 +  thread_spin_init(&lock);
++  thread_mutex_init(&mlock);
 +
 +  s1 = malloc(4096); // 4096 is the PGSIZE defined in kernel/riscv.h
 +  s2 = malloc(4096);
