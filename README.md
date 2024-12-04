@@ -18,7 +18,9 @@ Codes and assignments related to xv6 from OS course. Made with Copium.
 - `Inter Process Communication`|`Semaphore`|`Mutex`
 - `Reader-Writer's problem with writer's preference`
 - [Spec](/Specs/IPC%20Offline%20Specification-v.2.pdf)
+- [Submission](/Offlines/IPC/)
 
 ## Offline 5
 - `Kernel Level Thread`|`Synchronization`|`User Level Spinlock`|`User Level Mutex`
 - [Spec](/Specs/Offline_5_Threading.md)
+- [Submission](/Offlines/threading/threading.patch)
