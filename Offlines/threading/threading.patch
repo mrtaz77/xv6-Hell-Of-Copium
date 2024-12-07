@@ -796,7 +796,7 @@ index 0000000..2e06ef1
 \ No newline at end of file
 diff --git a/user/thread_mutex.c b/user/thread_mutex.c
 new file mode 100644
-index 0000000..8e62675
+index 0000000..02fa64a
 --- /dev/null
 +++ b/user/thread_mutex.c
 @@ -0,0 +1,35 @@
@@ -814,16 +814,16 @@ index 0000000..8e62675
 +{
 +  if(holding_mutex_thread(m))
 +    fprintf(2, "Warning: Lock already held by this thread\n");
-+  m->pid = getpid();
 +  while(__sync_lock_test_and_set(&m->locked, 1) != 0)
 +    yield();
 +  __sync_synchronize();
++  m->pid = getpid();
 +}
 +
 +void
 +thread_mutex_unlock(struct thread_mutex *m)
 +{
-+  if(!holding_mutex_thread(&m->locked))
++  if(!holding_mutex_thread(m))
 +    fprintf(2, "Warning: Lock not held by this thread\n");
 +  m->pid = 0;
 +  __sync_synchronize();
@@ -838,7 +838,7 @@ index 0000000..8e62675
 \ No newline at end of file
 diff --git a/user/thread_mutex.h b/user/thread_mutex.h
 new file mode 100644
-index 0000000..e29ec7a
+index 0000000..1d7e94a
 --- /dev/null
 +++ b/user/thread_mutex.h
 @@ -0,0 +1,17 @@
@@ -856,15 +856,15 @@ index 0000000..e29ec7a
 +void thread_mutex_init(struct thread_mutex*);
 +void thread_mutex_lock(struct thread_mutex*);
 +void thread_mutex_unlock(struct thread_mutex*);
-+void holding_mutex_thread(struct thread_mutex*);
++int holding_mutex_thread(struct thread_mutex*);
 +
 +#endif // THREAD_MUTEX_H
 diff --git a/user/thread_spinlock.c b/user/thread_spinlock.c
 new file mode 100644
-index 0000000..771b9f6
+index 0000000..0f8ec81
 --- /dev/null
 +++ b/user/thread_spinlock.c
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,36 @@
 +#include "thread_spinlock.h"
 +
 +void
@@ -879,11 +879,10 @@ index 0000000..771b9f6
 +{
 +  if(holding_spin_thread(lk))
 +    fprintf(2, "Warning: Lock already held by this thread\n");
-+  
-+  lk->pid = getpid();
 +  while(__sync_lock_test_and_set(&lk->locked, 1) != 0)
 +    ;
 +  __sync_synchronize();
++  lk->pid = getpid();
 +}
 +
 +void
@@ -891,7 +890,6 @@ index 0000000..771b9f6
 +{
 +  if(!holding_spin_thread(lk))
 +    fprintf(2, "Warning: Lock not held by this thread\n");
-+  
 +  lk->pid = 0;
 +  __sync_synchronize();
 +  __sync_lock_release(&lk->locked);
@@ -929,7 +927,7 @@ index 0000000..199de3e
 +#endif // THREAD_SPINLOCK_H
 diff --git a/user/threads.c b/user/threads.c
 new file mode 100644
-index 0000000..d0716e5
+index 0000000..a195e1f
 --- /dev/null
 +++ b/user/threads.c
 @@ -0,0 +1,76 @@
@@ -967,13 +965,13 @@ index 0000000..d0716e5
 +
 +    for (i = 0; i < b->amount; i++) { 
 +        // lock and mlock will be implemented by you.
-+         thread_spin_lock(&lock);
++        //  thread_spin_lock(&lock);
 +        //  thread_mutex_lock(&mlock);
 +         old = total_balance;
 +         delay(100000);
 +	 if(old != total_balance)  printf("we will miss an update. old: %d total_balance: %d\n", old, total_balance);
 +         total_balance = old + 1;
-+         thread_spin_unlock(&lock);
++        //  thread_spin_unlock(&lock);
 +        //  thread_mutex_unlock(&mlock);
 +
 +    }
