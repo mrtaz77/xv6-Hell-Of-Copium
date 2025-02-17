@@ -1,7 +1,12 @@
 #!/bin/bash
 
-patch_file_name="threading"
-output_dir="../Offlines/threading"
+if [ "$#" -ne 2 ]; then
+    echo "Usage: $0 <patch_file_name> <output_dir>"
+    exit 1
+fi
+
+patch_file_name="$1"
+output_dir="$2"
 
 cd xv6-riscv || {
 	echo "xv6-riscv dir not found!"
